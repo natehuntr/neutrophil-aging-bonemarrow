@@ -45,7 +45,8 @@ for (key in sample_keys) {
 
   # Resolution sweep over the WNN graph; clustree plots the stability of the
   # partitions so the chosen resolution is a decision, not a default.
-  neustem <- sweep_resolutions(neustem, cfg$clustering$resolution_grid)
+  neustem <- sweep_resolutions(neustem, cfg$clustering$resolution_grid,
+                               algorithm = cfg$clustering$algorithm)
   save_figure(clustree::clustree(neustem@meta.data, prefix = "clust_"),
               cfg, paste0(key, "_clustree.pdf"))
   neustem <- assign_clusters(neustem, cfg$clustering$chosen_resolution)

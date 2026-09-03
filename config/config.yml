@@ -58,22 +58,6 @@ samples:
       wnn_rna: 5
       wnn_adt: 10
 
-# ---------------------------------------------------------------------------
-# Ambient RNA correction
-#
-# NOTE ON REPRODUCIBILITY: the original notebook ran SoupX and then built the
-# analysis object from the *uncorrected* filtered counts, so the correction
-# never reached any downstream result. `use_corrected_counts: false` keeps
-# that behaviour so numbers match the original run. Set it to true to
-# actually use the SoupX-adjusted counts (recommended, but it will change
-# every downstream number).
-# ---------------------------------------------------------------------------
-soupx:
-  run: true
-  use_corrected_counts: false
-  quick_cluster_dims: 30
-  quick_cluster_resolution: 0.5
-
 adt:
   isotype_pattern: "^Isotype"
   # Antibodies whose signal is dominated by a bimodal background; listed for
@@ -89,6 +73,9 @@ qc:
   max_percent_hb: 10
 
 clustering:
+  # 4 = Leiden (needs the Python leidenalg package via reticulate);
+  # 1 = Louvain, which needs nothing extra.
+  algorithm: 4
   resolution_grid: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6]
   chosen_resolution: 0.4
 

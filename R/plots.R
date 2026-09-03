@@ -51,6 +51,11 @@ plot_pseudobulk_pca <- function(obj, cfg, label = NULL,
     obj <- subset(obj, cells = cells)
   }
 
+  # A cell with no hashtag call has no age_sex, and AverageExpression would
+  # turn those into their own "NA" column.
+  labelled <- colnames(obj)[!is.na(obj[[group_col]][, 1])]
+  obj <- subset(obj, cells = labelled)
+
   avg <- Seurat::AverageExpression(obj, group.by = group_col,
                                    assays = "RNA", layer = "data")$RNA
   if (ncol(avg) < 3) {
@@ -127,7 +132,7 @@ plot_gsea_bars <- function(comparison, n = 25) {
 #' NES per age for the pathways the interaction test flagged.
 plot_nes_trajectories <- function(classified, cfg, n = 30) {
   age_levels <- cfg$analysis$age_levels
-  top <- utils::head(classified[classified$class == "sex-differential ageing (supported)", ], n)
+  top <- utils::head(classified[which(classified$class == "sex-differential ageing (supported)"), ], n)
   if (!nrow(top)) { message("no supported hits to plot"); return(NULL) }
 
   plot_df <- tidyr::pivot_longer(

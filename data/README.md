@@ -9,15 +9,14 @@ The pipeline expects this layout:
 ```
 data/per_sample_outs/
 ├── MCC8209A3_Male_BM_3/
-│   ├── sample_raw_feature_bc_matrix/
 │   └── sample_filtered_feature_bc_matrix/
 └── MCC8209A4_Female_BM_4/
-    ├── sample_raw_feature_bc_matrix/
     └── sample_filtered_feature_bc_matrix/
 ```
 
-Both the raw and filtered matrices are needed: SoupX estimates ambient RNA
-from the difference between them.
+Only the filtered (cell-containing) matrix is read. The raw matrix is not
+used: it was only needed for ambient-RNA estimation, which the pipeline no
+longer does.
 
 A symlink works just as well as a copy:
 

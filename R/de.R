@@ -14,6 +14,35 @@
 
 # --- 1. Spearman age trends ------------------------------------------------
 
+#' Spearman correlation of every row of `expr` against `y`, vectorised.
+#'
+#' apply(expr, 1, cor.test) coerces the whole sparse matrix to dense and calls
+#' cor.test tens of thousands of times, which dominates the runtime of every
+#' age-trend step. Spearman is Pearson on ranks, so ranking once and calling
+#' cor() gives identical rho for a fraction of the cost.
+#'
+#' The p-value is the same asymptotic t approximation cor.test() uses for
+#' method = "spearman", exact = FALSE, so results match that call rather than
+#' merely resembling it. Rows with no variance get NA, as they would there.
+spearman_rows <- function(expr, y) {
+  n <- length(y)
+  stopifnot(ncol(expr) == n, n > 3)
+
+  y_rank <- rank(y)
+  expr_rank <- t(apply(as.matrix(expr), 1, rank))
+
+  rho <- as.numeric(suppressWarnings(stats::cor(t(expr_rank), y_rank)))
+  names(rho) <- rownames(expr)
+
+  # t = rho * sqrt((n - 2) / (1 - rho^2)), two-sided on n - 2 df.
+  denom <- 1 - rho^2
+  t_stat <- ifelse(denom <= 0, NA_real_, rho * sqrt((n - 2) / denom))
+  pval <- 2 * stats::pt(abs(t_stat), df = n - 2, lower.tail = FALSE)
+
+  data.frame(gene = names(rho), rho = unname(rho), pval = pval,
+             row.names = NULL, stringsAsFactors = FALSE)
+}
+
 #' Per-gene Spearman correlation of expression against age.
 #'
 #' Age is converted to a rank via `age_levels`, so the test is for a monotonic
@@ -27,19 +56,9 @@ age_trend_test <- function(obj, age_levels, age_col = "age", assay = "RNA") {
   age_numeric <- as.numeric(factor(age_char, levels = age_levels))
   expr <- Seurat::GetAssayData(obj, assay = assay, layer = "data")
 
-  results <- apply(expr, 1, function(x) {
-    x <- as.numeric(x)
-    sx <- suppressWarnings(stats::sd(x))
-    if (is.na(sx) || !is.finite(sx) || sx == 0)
-      return(c(rho = NA_real_, pval = NA_real_))
-    ct <- suppressWarnings(
-      stats::cor.test(x, age_numeric, method = "spearman", exact = FALSE))
-    c(rho = unname(ct$estimate), pval = ct$p.value)
-  })
-
-  df <- as.data.frame(t(results))
-  df$gene <- rownames(df)
+  df <- spearman_rows(expr, age_numeric)
   df$padj <- stats::p.adjust(df$pval, method = "BH")
+  rownames(df) <- df$gene
   df
 }
 
@@ -374,9 +393,15 @@ shuffle_age_sex <- function(meta) {
 }
 
 #' Fitted group means on the log scale, from a treatment-coded ~ age fit.
+#'
+#' Column 1 of Beta is the intercept, i.e. the reference age; each later
+#' column is that level's offset from it.
 glm_group_means <- function(fit, age_levels) {
   B <- fit$Beta
-  means <- cbind(B[, 1], B[, 1] + B[, 2], B[, 1] + B[, 3])
+  if (ncol(B) != length(age_levels))
+    stop("fit has ", ncol(B), " coefficients but ", length(age_levels),
+         " age levels were given; is the design ~ age with treatment coding?")
+  means <- cbind(B[, 1], B[, 1] + B[, -1, drop = FALSE])
   colnames(means) <- age_levels
   means
 }

@@ -1,98 +1,58 @@
 # ---------------------------------------------------------------------------
-# Per-sample preprocessing: ambient RNA, ADT/HTO assays, demultiplexing,
-# QC metrics, doublets, filtering.
+# Per-sample preprocessing: ADT/HTO assays, hashtag demultiplexing, QC
+# metrics, doublet calls and filtering.
 # ---------------------------------------------------------------------------
 
-#' Estimate and remove ambient ("soup") RNA with SoupX.
-#'
-#' SoupX needs a clustering to estimate contamination, so a throwaway Seurat
-#' object is clustered here purely to supply one.
-run_soupx <- function(mats, cfg) {
-  sc <- SoupX::SoupChannel(tod = mats$raw_gex,
-                           toc = mats$filtered_gex,
-                           channelName = mats$sample_id)
-
-  quick <- Seurat::CreateSeuratObject(counts = mats$filtered_gex)
-  quick <- Seurat::NormalizeData(quick, verbose = FALSE)
-  quick <- Seurat::FindVariableFeatures(quick, verbose = FALSE)
-  quick <- Seurat::ScaleData(quick, verbose = FALSE)
-  quick <- Seurat::RunPCA(quick, npcs = cfg$soupx$quick_cluster_dims, verbose = FALSE)
-  quick <- Seurat::FindNeighbors(quick, dims = seq_len(cfg$soupx$quick_cluster_dims),
-                                 verbose = FALSE)
-  quick <- Seurat::FindClusters(quick, resolution = cfg$soupx$quick_cluster_resolution,
-                                verbose = FALSE)
-
-  clusters <- stats::setNames(as.character(quick$seurat_clusters), colnames(quick))
-  sc <- SoupX::setClusters(sc, clusters)
-  sc <- SoupX::autoEstCont(sc)
-
-  log_step(sprintf("SoupX contamination estimate: %.3f", sc$fit$rhoEst))
-  top_soup <- utils::head(sc$soupProfile[order(-sc$soupProfile$est), ], 20)
-
-  list(
-    channel        = sc,
-    rho            = sc$fit$rhoEst,
-    top_soup_genes = top_soup,
-    counts         = SoupX::adjustCounts(sc, roundToInt = TRUE)
-  )
-}
-
 #' Build the RNA Seurat object for a sample.
-#'
-#' `use_corrected` selects between the SoupX-adjusted counts and the raw
-#' filtered counts. See the note in config/config.yml: the original notebook
-#' used the uncorrected counts.
-create_rna_object <- function(mats, soup, cfg) {
-  counts <- if (isTRUE(cfg$soupx$use_corrected_counts) && !is.null(soup)) {
-    log_step("using SoupX-corrected counts")
-    soup$counts
-  } else {
-    log_step("using uncorrected filtered counts")
-    mats$filtered_gex
-  }
-  Seurat::CreateSeuratObject(counts = counts, project = mats$sample_id)
+create_rna_object <- function(mats) {
+  Seurat::CreateSeuratObject(counts = mats$gex, project = mats$sample_id)
 }
 
 #' Isotype-centred ADT normalisation.
 #'
 #' log1p of the raw ADT counts, then subtract each cell's median isotype
 #' control signal. This is the background-subtraction half of DSB: it removes
-#' per-cell background but does not rescale by the empty-droplet variance.
-normalise_adt_isotype <- function(mats, cells, cfg) {
-  isotype_features <- grep(cfg$adt$isotype_pattern, rownames(mats$raw_adt), value = TRUE)
+#' per-cell background but does not rescale by empty-droplet variance, so
+#' values are comparable across cells but are not in DSB units.
+#'
+#' The isotype rows themselves stay in the matrix and end up centred near
+#' zero, which is what makes them useful as a sanity check on the panel.
+normalise_adt_isotype <- function(mats, cells, features, cfg) {
+  isotype_features <- grep(cfg$adt$isotype_pattern, features, value = TRUE)
   if (length(isotype_features) == 0)
     stop("no isotype controls matched '", cfg$adt$isotype_pattern, "' in the ADT panel")
 
-  adt_features <- adt_feature_names(mats, cfg)
-  cell_adt <- as.matrix(mats$filtered_adt[adt_features, cells, drop = FALSE])
-
-  adt_log <- log1p(cell_adt)
+  adt_log <- log1p(as.matrix(mats$adt[features, cells, drop = FALSE]))
   isotype_median <- matrixStats::colMedians(adt_log[isotype_features, , drop = FALSE])
   sweep(adt_log, 2, isotype_median, "-")
 }
 
 #' Antibody rows that are not hashtags.
-adt_feature_names <- function(mats, cfg, hashtags = NULL) {
-  hashtags <- hashtags %||% grep("Hashtag", rownames(mats$raw_adt), value = TRUE)
-  setdiff(rownames(mats$raw_adt), hashtags)
+adt_feature_names <- function(mats, hashtags) {
+  setdiff(rownames(mats$adt), hashtags)
 }
 
 #' Attach the ADT and HTO assays to an RNA object.
+#'
+#' The normalised matrix is written straight into the ADT `data` layer: it is
+#' already on a log scale, so Seurat's own NormalizeData must not be run on
+#' this assay afterwards.
 add_protein_assays <- function(obj, mats, cfg, hashtags) {
   cells <- colnames(obj)
-  missing_htos <- setdiff(hashtags, rownames(mats$filtered_adt))
+  missing_htos <- setdiff(hashtags, rownames(mats$adt))
   if (length(missing_htos))
     stop("hashtags named in config are absent from the ADT panel: ",
-         paste(missing_htos, collapse = ", "))
+         paste(missing_htos, collapse = ", "),
+         "\nPanel rows are: ", paste(rownames(mats$adt), collapse = ", "))
 
-  adt_features <- adt_feature_names(mats, cfg, hashtags)
+  adt_features <- adt_feature_names(mats, hashtags)
 
   obj[["ADT"]] <- Seurat::CreateAssayObject(
-    counts = mats$filtered_adt[adt_features, cells, drop = FALSE])
-  obj[["ADT"]]$data <- normalise_adt_isotype(mats, cells, cfg)[adt_features, , drop = FALSE]
+    counts = mats$adt[adt_features, cells, drop = FALSE])
+  obj[["ADT"]]$data <- normalise_adt_isotype(mats, cells, adt_features, cfg)
 
   obj[["HTO"]] <- Seurat::CreateAssayObject(
-    counts = mats$filtered_adt[hashtags, cells, drop = FALSE])
+    counts = mats$adt[hashtags, cells, drop = FALSE])
   obj
 }
 
@@ -131,8 +91,17 @@ add_qc_metrics <- function(obj, cfg) {
 }
 
 #' Call doublets per hashtag group with scDblFinder.
+#'
+#' The SCE is built straight from the counts: as.SingleCellExperiment() wants
+#' a populated `data` layer, which does not exist this early in the pipeline.
+#'
+#' `samples` is the hashtag call, so doublet rates are estimated per
+#' multiplexed group. Cells called Doublet or Negative by the demultiplexer
+#' form their own pseudo-groups; they are dropped by filter_cells() regardless
+#' of what scDblFinder decides about them.
 add_doublet_calls <- function(obj) {
-  sce <- Seurat::as.SingleCellExperiment(obj)
+  sce <- SingleCellExperiment::SingleCellExperiment(
+    list(counts = Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")))
   sce <- scDblFinder::scDblFinder(sce, samples = obj$MULTI_ID)
 
   obj$scDblFinder.class <- sce$scDblFinder.class
@@ -156,6 +125,14 @@ filter_cells <- function(obj, cfg, hashtags) {
     obj$log10GenesPerUMI > qc$min_log10_genes_per_umi &
     obj$mitoRatio < qc$max_mito_ratio &
     obj$percent.hb < qc$max_percent_hb
+
+  # A cell with a single UMI gives log10GenesPerUMI = Inf/NaN, which would
+  # make `keep` NA and break the subset. Treat any non-TRUE as a failure.
+  n_undecided <- sum(is.na(keep))
+  if (n_undecided)
+    log_step(sprintf("  %d cells had a non-finite QC metric and were dropped",
+                     n_undecided))
+  keep <- !is.na(keep) & keep
 
   n_before <- ncol(obj)
   obj <- subset(obj, cells = colnames(obj)[keep])

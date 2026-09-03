@@ -71,9 +71,10 @@ fits <- list(
   male   = glm_lrt(counts[, is_male],   droplevels(meta[is_male, ]),   ~ age, ~ 1),
   interaction = glm_lrt(counts, meta, ~ age * sex, ~ age + sex)
 )
-# All three spend the same 2 df, which is what makes their thresholds
-# comparable.
-stopifnot(vapply(fits, function(f) all(f$res$df1 == 2), logical(1)))
+# All three spend the same degrees of freedom, which is what makes their
+# thresholds comparable.
+expected_df <- length(age_levels) - 1
+stopifnot(vapply(fits, function(f) all(f$res$df1 == expected_df), logical(1)))
 
 log_step("permuting (", n_perm, " refits per model)")
 nulls <- list(
@@ -205,9 +206,19 @@ tab$driver <- with(tab, ifelse(age_effect & sex_effect, "both",
 
 # Where along the trajectory each hit differs: fitted values per group at five
 # points across the span, for characterisation rather than testing.
+#
+# The prediction grid must reuse the spline basis the model was fitted with.
+# Calling model.matrix() on a fresh grid re-derives the knots from that grid,
+# which silently produces a different basis and therefore wrong fitted values.
+# model.frame() records the fitted basis in the terms "predvars" attribute,
+# and model.matrix() reuses it when handed those terms.
 pt_grid <- seq(min(cd$pt), max(cd$pt), length.out = 5)
 newdat <- expand.grid(pt = pt_grid, age = levels(cd$age), sex = levels(cd$sex))
-pred <- traj$any$fit$Beta[tab$name, , drop = FALSE] %*% t(stats::model.matrix(f_lean, newdat))
+fitted_terms <- stats::terms(stats::model.frame(f_lean, as.data.frame(cd)))
+mm_new <- stats::model.matrix(fitted_terms, newdat)
+stopifnot(identical(colnames(mm_new), colnames(traj$any$fit$Beta)))
+
+pred <- traj$any$fit$Beta[tab$name, , drop = FALSE] %*% t(mm_new)
 colnames(pred) <- with(newdat, paste0("pt", round(pt, 2), "_", age, "_", sex))
 
 log_step(sprintf("any age/sex effect: thresh %.2e -> %d genes (BH<0.05: %d)",

@@ -49,7 +49,7 @@ for (key in sample_keys)
 # --- all cells, both sexes -------------------------------------------------
 log_step("=== merging all cells ===")
 bm_merged <- merge(annotated[[1]], y = annotated[-1], merge.data = TRUE)
-bm_merged <- Seurat::JoinLayers(bm_merged)
+bm_merged <- join_all_layers(bm_merged)
 bm_merged <- run_sct_reduction(bm_merged, cfg$samples[[1]]$dims$sct_pca)
 bm_merged <- run_rna_reduction(bm_merged, cfg$samples[[1]]$dims$rna_pca)
 bm_merged <- run_adt_reduction(bm_merged, cfg$samples[[1]]$dims$neustem_adt_pca)
@@ -65,7 +65,7 @@ subsets <- lapply(neustem, function(obj) {
 })
 
 gmp_neu <- merge(subsets[[1]], y = subsets[-1], merge.data = TRUE)
-gmp_neu <- Seurat::JoinLayers(gmp_neu)
+gmp_neu <- join_all_layers(gmp_neu)
 gmp_neu <- run_rna_reduction(gmp_neu, cfg$samples[[1]]$dims$rna_pca)
 gmp_neu <- add_module_scores(gmp_neu)
 

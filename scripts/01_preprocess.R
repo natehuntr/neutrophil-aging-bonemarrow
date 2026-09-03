@@ -5,9 +5,9 @@
 #   Rscript scripts/01_preprocess.R            # every sample in the config
 #   Rscript scripts/01_preprocess.R male       # just one
 #
-# Reads Cell Ranger output, estimates ambient RNA with SoupX, builds the RNA /
-# ADT / HTO assays, demultiplexes the hashtags into ages, computes QC metrics,
-# calls doublets and applies the QC thresholds.
+# Reads the Cell Ranger filtered matrix, builds the RNA / ADT / HTO assays,
+# demultiplexes the hashtags into ages, computes QC metrics, calls doublets
+# and applies the QC thresholds.
 #
 # Writes: results/objects/<key>_filtered.rds
 #         results/figures/<key>_qc.pdf, <key>_doublets.pdf
@@ -28,13 +28,7 @@ for (key in sample_keys) {
 
   mats <- read_cite_sample(cfg, sample_cfg$sample_id)
 
-  soup <- if (isTRUE(cfg$soupx$run)) run_soupx(mats, cfg) else NULL
-  if (!is.null(soup)) {
-    write_table(soup$top_soup_genes, cfg, paste0(key, "_soup_profile_top20.csv"),
-                row.names = TRUE)
-  }
-
-  obj <- create_rna_object(mats, soup, cfg)
+  obj <- create_rna_object(mats)
   obj <- add_protein_assays(obj, mats, cfg, hashtags = names(sample_cfg$hashtags))
   obj <- demultiplex_hashtags(obj, sample_cfg)
   obj <- add_qc_metrics(obj, cfg)
@@ -46,7 +40,7 @@ for (key in sample_keys) {
   obj <- filter_cells(obj, cfg, hashtags = names(sample_cfg$hashtags))
   save_object(obj, cfg, paste0(key, "_filtered.rds"))
 
-  rm(mats, soup, obj)
+  rm(mats, obj)
   gc(verbose = FALSE)
 }
 

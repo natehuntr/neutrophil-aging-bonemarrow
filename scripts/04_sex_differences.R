@@ -44,7 +44,17 @@ for (assay in c("RNA", "ADT")) {
   Seurat::DefaultAssay(neutrophils) <- assay
   degs[[assay]] <- list()
 
+  group_sizes <- table(neutrophils$age_sex)
   for (age in age_levels) {
+    idents <- paste0(age, c("_M", "_F"))
+    present <- idents[idents %in% names(group_sizes)]
+    if (length(present) < 2 || any(group_sizes[present] < 3)) {
+      log_step("skipping ", age, " (", assay, "): ",
+               paste(idents, ifelse(idents %in% present, group_sizes[idents], 0),
+                     sep = "=", collapse = ", "))
+      next
+    }
+
     log_step("DE: ", age, " male vs female (", assay, ")")
     res <- Seurat::FindMarkers(neutrophils,
                                ident.1 = paste0(age, "_M"),
@@ -90,7 +100,7 @@ ora_for_age <- function(res) {
   })
 }
 
-for (age in age_levels) {
+for (age in names(degs[["RNA"]])) {
   log_step("GO ORA: ", age)
   terms <- ora_for_age(degs[["RNA"]][[age]])
   for (direction in names(terms)) {

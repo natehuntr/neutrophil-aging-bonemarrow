@@ -73,6 +73,7 @@ trajectory_genes <- function(cds, cores = 4) {
 #' Spearman correlation of every gene against pseudotime.
 #'
 #' Cells with non-finite pseudotime (disconnected from the root) are dropped.
+#' Uses the vectorised spearman_rows() from R/de.R.
 pseudotime_spearman <- function(cds) {
   pt <- monocle3::pseudotime(cds)
   expr <- SingleCellExperiment::counts(cds)[, names(pt), drop = FALSE]
@@ -81,14 +82,8 @@ pseudotime_spearman <- function(cds) {
   expr <- expr[, valid, drop = FALSE]
   pt <- pt[valid]
 
-  results <- apply(expr, 1, function(x) {
-    test <- suppressWarnings(
-      stats::cor.test(as.numeric(x), pt, method = "spearman", exact = FALSE))
-    c(rho = unname(test$estimate), p_value = test$p.value)
-  })
-
-  df <- as.data.frame(t(results))
-  df$gene <- rownames(df)
+  df <- spearman_rows(expr, pt)
+  names(df)[names(df) == "pval"] <- "p_value"
   df$padj <- stats::p.adjust(df$p_value, method = "BH")
   df[order(-abs(df$rho)), ]
 }

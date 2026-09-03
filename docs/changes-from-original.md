@@ -37,9 +37,10 @@ name says what is in it.
 
 1. **SoupX was computed and discarded.** `soup_male_bm` was built from the
    corrected counts, but the object carried forward (`male_bm`) was built from
-   the uncorrected `filtered_gex`. The correction reached nothing. This is now
-   the explicit switch `soupx.use_corrected_counts`, defaulting to `false` so
-   the numbers still match the original run.
+   the uncorrected `filtered_gex`, so the correction reached nothing. Ambient
+   correction has since been removed from the pipeline entirely, which makes
+   the original behaviour the actual behaviour. The raw (empty-droplet) matrix
+   is no longer read at all, since SoupX was its only consumer.
 
 2. **`main_label_score` was a matrix.** `obj$main_label_score <-
    cell_identity$scores` assigns a cells-x-labels matrix into a metadata column.
@@ -109,3 +110,62 @@ name says what is in it.
 - The empty chunks and the `## Stem cells and neutrophils` heading with no code.
 - The `library()` calls scattered through 30 chunks: dependencies are declared
   once in `R/packages.R` and installed by `scripts/00_install_dependencies.R`.
+
+## Second review pass
+
+A further read of the restructured code found these. The first four were
+present in the original notebook too; the rest are robustness gaps that the
+original avoided only by being run by hand, one chunk at a time.
+
+- **Spline predictions used the wrong knots.** The `pt_age_sex_fitted.csv`
+  grid was built with `model.matrix(f_lean, newdat)`, which re-derives the
+  `ns()` knots *from the prediction grid* instead of reusing the ones the model
+  was fitted with. The two bases differ (up to ~0.09 in basis value on a
+  realistic grid), so every fitted value in that table was wrong. Step 7 now
+  builds the grid from the fitted model's `terms()`, whose `predvars` attribute
+  carries the original knots, and asserts the design columns match the fitted
+  coefficients.
+
+- **`padj < 0.05` on fgsea output.** fgsea leaves `padj` as NA for pathways it
+  cannot score, so the filter produced NA rows, which `collapsePathways()`
+  rejects. Filters now go through `which()`.
+
+- **Per-gene `cor.test()` in a loop.** The age-trend, pseudotime and per-sex
+  rho functions each called `apply(expr, 1, cor.test)`, which densifies the
+  whole matrix and runs tens of thousands of tests. `spearman_rows()` ranks
+  once and calls `cor()`, then computes the p-value from the same asymptotic t
+  approximation `cor.test(method = "spearman", exact = FALSE)` uses — verified
+  identical to ten decimal places, including the NA for a zero-variance gene.
+  This function is called twelve times per run, so it was a large share of the
+  total runtime.
+
+- **`min(x, na.rm = TRUE)` over an all-NA row** returned `Inf` with a warning
+  rather than reporting "not significant at any age".
+
+- **PCA and t-SNE on small strata.** `RunPCA` defaults to 50 components, which
+  errors on a subset with fewer cells — or, for the ~30-antibody ADT panel,
+  fewer features. `safe_npcs()` and `safe_dims()` cap both, and t-SNE
+  perplexity is capped at `(n - 2) / 3`.
+
+- **Assay conversion before normalisation.** `as.SingleCellExperiment()` wants
+  a populated `data` layer, which does not exist when doublets are called. The
+  SCE is now built directly from the counts.
+
+- **Non-finite QC metrics.** A cell with a single UMI gives
+  `log10GenesPerUMI = Inf/NaN`, making the filter vector NA and breaking the
+  subset. Non-TRUE now counts as a failure, and the count is logged.
+
+- **Split layers after a merge.** `JoinLayers()` only joins the default assay,
+  so the ADT assay stayed split and `ScaleData` on it did not do what it
+  appeared to. `join_all_layers()` joins every v5 assay.
+
+- **Missing groups aborted whole scripts.** `FindMarkers` on an absent or
+  3-cell ident, and `fitGAM` on an empty gene set, both failed with opaque
+  errors. Those cases are now checked, skipped or explained.
+
+- **`FindMarkers(layer = "data")`** was removed: Seurat builds disagree on
+  whether that argument is `slot` or `layer`, and "data" is the default in both.
+
+- **`glm_group_means()` assumed exactly three ages.** It indexed `Beta[, 2]`
+  and `Beta[, 3]` directly; it now derives the means from however many levels
+  the design has, and errors if the design is not `~ age`.

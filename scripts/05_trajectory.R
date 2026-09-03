@@ -68,6 +68,10 @@ save_object(combined_cds, cfg, "combined_cds.rds")
 all_sig_genes <- unique(unlist(moran_lists))
 all_sig_genes <- intersect(all_sig_genes, rownames(SingleCellExperiment::counts(combined_cds)))
 log_step(length(all_sig_genes), " genes carried into the GAM fits")
+if (length(all_sig_genes) < 10)
+  stop("only ", length(all_sig_genes), " genes were graph-associated in any ",
+       "per-age trajectory; there is nothing to fit. Check the trajectories in ",
+       "results/tables/*_trajectory_moran.csv before going further.")
 
 # --- 3. Per-sex tradeSeq GAMs, conditioned on age -------------------------
 # Each sex is fitted separately on the shared pseudotime axis; `conditions`
@@ -80,6 +84,12 @@ for (sex in cfg$analysis$sex_levels) {
   finite <- is.finite(pt)
   cds_sex <- cds_sex[, finite]
   pt <- pt[finite]
+
+  ages_present <- table(SummarizedExperiment::colData(cds_sex)$age)
+  if (any(ages_present < 20))
+    warning(sex, ": ", paste(names(ages_present), ages_present, sep = "=",
+                             collapse = ", "),
+            " cells per age -- the condition smoothers will be unstable")
 
   gam <- tradeSeq::fitGAM(
     counts = SingleCellExperiment::counts(cds_sex)[all_sig_genes, , drop = FALSE],

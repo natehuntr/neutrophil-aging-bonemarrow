@@ -18,8 +18,12 @@ annotate_singler <- function(obj, cfg) {
   obj$singleR_main_label <- main$pruned.labels
   obj$singleR_fine_label <- fine$pruned.labels
   # `scores` is a cell x label matrix; only the winning score is a per-cell
-  # value, so that is what goes into metadata.
-  obj$main_label_score <- apply(main$scores, 1, max)
+  # value, so that is what goes into metadata. A cell with no finite score at
+  # all gets NA rather than -Inf.
+  obj$main_label_score <- apply(main$scores, 1, function(x) {
+    x <- x[is.finite(x)]
+    if (length(x)) max(x) else NA_real_
+  })
 
   obj$singleR_main_label[is.na(obj$singleR_main_label)] <- "NA"
   obj$singleR_fine_label[is.na(obj$singleR_fine_label)] <- "NA"

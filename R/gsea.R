@@ -26,8 +26,9 @@ GRANULE_GENES <- c("Ngp", "Lcn2", "Ltf", "Camp", "Chil3", "Serpinb1a",
 
 #' Spearman rho of every detected gene against numeric age, within one sex.
 #'
-#' Spearman is computed as Pearson on ranks, which is far faster than
-#' cor.test() per gene and gives the same rho.
+#' Genes are filtered on detection rate *within this sex*; fisher_z_contrast()
+#' then inner-joins the two sexes, so the contrast is computed on the
+#' intersection. That intersection is the shared universe the GSEA runs on.
 compute_rho_by_sex <- function(obj, sex_value, cfg,
                                sex_col = "sex", age_col = "age", assay = "RNA") {
   cells <- colnames(obj)[as.character(obj[[sex_col]][, 1]) == sex_value]
@@ -43,11 +44,8 @@ compute_rho_by_sex <- function(obj, sex_value, cfg,
   pct <- Matrix::rowMeans(expr > 0)
   expr <- expr[names(pct)[pct >= cfg$gsea$min_pct_cells], , drop = FALSE]
 
-  age_ranks <- rank(age)
-  expr_ranks <- t(apply(as.matrix(expr), 1, rank))
-  rho <- as.numeric(stats::cor(t(expr_ranks), age_ranks))
-
-  tibble::tibble(gene = rownames(expr), rho = rho, n = ncol(expr))
+  df <- spearman_rows(expr, age)
+  tibble::tibble(gene = df$gene, rho = df$rho, n = ncol(expr))
 }
 
 #' Fisher-z contrast of the two per-sex rho tables, with a per-gene label
@@ -123,7 +121,9 @@ run_interaction_gsea <- function(rank_tbl, pathways, cfg) {
                                 maxSize = cfg$gsea$max_set_size, eps = 0)
 
   ordered <- res[order(res$pval), ]
-  sig <- ordered[ordered$padj < 0.05, ]
+  # fgsea leaves padj NA for pathways it could not score; `padj < 0.05` would
+  # carry those through as NA rows and collapsePathways rejects them.
+  sig <- ordered[which(ordered$padj < 0.05), ]
   # GO:BP is heavily redundant; collapse nested and overlapping sets.
   main <- if (nrow(sig) > 0) fgsea::collapsePathways(sig, pathways, ranks)
           else list(mainPathways = character(0))
@@ -195,10 +195,17 @@ sex_de_at_age <- function(obj, this_age, cfg,
   cells <- colnames(obj)[as.character(obj[[age_col]][, 1]) == this_age]
   sub <- subset(obj, cells = cells)
   Seurat::Idents(sub) <- sub[[sex_col]][, 1]
-  log_step("age ", this_age, ": ", paste(table(Seurat::Idents(sub)), collapse = " / "), " cells")
 
+  counts <- table(Seurat::Idents(sub))
+  log_step("age ", this_age, ": ", paste(names(counts), counts, sep = "=",
+                                         collapse = " / "), " cells")
+  if (!all(c("male", "female") %in% names(counts)) || any(counts < 3))
+    stop("age ", this_age, " does not have at least 3 cells of each sex")
+
+  # The default layer is "data", which is what this needs; naming it here
+  # would break on whichever of slot=/layer= the installed Seurat does not have.
   markers <- Seurat::FindMarkers(sub, ident.1 = "male", ident.2 = "female",
-                                 assay = assay, layer = "data",
+                                 assay = assay,
                                  logfc.threshold = 0, min.pct = cfg$gsea$min_pct_cells,
                                  test.use = "wilcox", verbose = FALSE)
   tibble::rownames_to_column(markers, "gene")
@@ -263,7 +270,10 @@ compare_perage_to_interaction <- function(obj, rank_tbl, pathways, cfg,
                                     function(x) length(unique(x)) == 1)
   # does the per-age picture agree with the interaction statistic?
   combined$agrees_with_int <- sign(combined$delta_last_first) == sign(combined$NES_int)
-  combined$sig_any_age <- apply(padj_mat, 1, function(x) min(x, na.rm = TRUE)) < 0.05
+  combined$sig_any_age <- apply(padj_mat, 1, function(x) {
+    x <- x[!is.na(x)]
+    length(x) > 0 && min(x) < 0.05
+  })
   combined$sig_int <- combined$padj_int < 0.05
 
   combined$class <- with(combined, dplyr::case_when(

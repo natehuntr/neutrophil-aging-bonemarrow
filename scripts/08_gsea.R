@@ -53,7 +53,7 @@ pathways <- gobp_pathways(rank_tbl$gene, cfg)
 gsea <- run_interaction_gsea(rank_tbl, pathways, cfg)
 write_table(gsea$result, cfg, "gsea_sex_by_age_GOBP.csv")
 
-reportable <- gsea$result[gsea$result$padj < 0.05 & gsea$result$independent, ]
+reportable <- gsea$result[which(gsea$result$padj < 0.05 & gsea$result$independent), ]
 log_step(nrow(reportable), " independent pathways at padj < 0.05")
 print(utils::head(reportable[, c("pathway", "NES", "padj", "signal_type",
                                  "dominant_pattern", "dominant_frac")], 30))

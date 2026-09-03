@@ -45,7 +45,7 @@ docs/               provenance and notes
 | `R/setup.R` | project root, config loading, path and I/O helpers |
 | `R/packages.R` | package loading with one actionable error |
 | `R/io.R` | reading Cell Ranger matrices |
-| `R/preprocess.R` | SoupX, ADT/HTO assays, demultiplexing, QC, doublets |
+| `R/preprocess.R` | ADT/HTO assays, demultiplexing, QC, doublets |
 | `R/dimred.R` | the RNA / SCT / ADT / WNN reduction recipes |
 | `R/annotate.R` | SingleR, ImmGen label map, CytoTRACE2, module scores |
 | `R/trajectory.R` | monocle3 trajectories and pseudotime correlations |
@@ -79,12 +79,8 @@ their hashtag-to-age maps, per-sample PCA dimensions, QC thresholds, clustering
 resolution, the cluster-to-stage mapping, and the parameters for each
 statistical method. No script contains a threshold or a path of its own.
 
-Two settings change results rather than performance, and are worth knowing about:
+One setting changes results rather than performance:
 
-- **`soupx.use_corrected_counts`** (default `false`). The original notebook ran
-  SoupX and then built the analysis object from the *uncorrected* counts, so the
-  correction never reached a result. The default reproduces that; set it to
-  `true` to actually use the corrected counts.
 - **`analysis.neutrophil_cluster_labels`**. A manual mapping from cluster id to
   maturation stage. Cluster numbering is not stable across Seurat versions, so
   re-check it against `results/figures/gmp_neutrophil_modules.pdf` whenever

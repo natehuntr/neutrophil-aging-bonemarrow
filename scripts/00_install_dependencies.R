@@ -17,7 +17,7 @@ cran <- c(
 )
 
 bioc <- c(
-  "SoupX", "scDblFinder", "glmGamPoi", "SingleR", "celldex", "dittoSeq",
+  "scDblFinder", "glmGamPoi", "SingleR", "celldex", "dittoSeq",
   "SingleCellExperiment", "SummarizedExperiment", "fgsea", "tradeSeq",
   "clusterProfiler", "org.Mm.eg.db", "EnsDb.Mmusculus.v79", "batchelor"
 )

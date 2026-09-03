@@ -36,7 +36,7 @@ non-comparable.
 
 | Step | Script | Output |
 |---|---|---|
-| Preprocess (SoupX, ADT/HTO, QC, doublets) | `01_preprocess.R` | `<sex>_filtered.rds` |
+| Preprocess (ADT/HTO, QC, doublets) | `01_preprocess.R` | `<sex>_filtered.rds` |
 | Reductions, SingleR, stem/neutrophil subset | `02_annotate.R` | `<sex>_annotated.rds`, `<sex>_neustem.rds` |
 | Merge sexes, stage the granulocytes | `03_merge.R` | `gmp_neutrophils.rds` |
 | Male vs female within age | `04_sex_differences.R` | `degs_<age>_<assay>.csv` |
@@ -137,8 +137,10 @@ abundant granule transcripts.
   selected on a BH-adjusted Wilcoxon p-value does not.
 - One 10x run per sex means sex is completely confounded with batch. Sex
   differences here cannot be separated from run-to-run technical variation.
-- SoupX contamination is estimated in step 1 but, by default, not applied
-  downstream. See `soupx.use_corrected_counts` in the config.
+- No ambient-RNA correction is applied. Highly expressed granule transcripts
+  are the ones most likely to bleed between droplets, and they are also the
+  ones carrying the maturation signal, so read stage-specific results for
+  those genes with that in mind.
 
 ```{r session}
 sessionInfo()
