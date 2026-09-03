@@ -15,6 +15,12 @@
 # Caveat kept from the original analysis: cells are pseudoreplicates of pooled
 # animals, so z_diff is not per-gene evidence. Its job is to produce a sensibly
 # scaled ranking, which is all GSEA needs.
+#
+# STRATIFY BEFORE CALLING THIS. Every function here assumes it has been handed
+# one maturation stage. Run on stages pooled, a shift in stage composition with
+# age turns into an apparent age trend for every gene that differs between
+# stages, and the ranking stops being a statement about cells. Step 8 loops
+# over gsea.stages for that reason.
 # ---------------------------------------------------------------------------
 
 # Genes flagged (never auto-removed) in leading edges.

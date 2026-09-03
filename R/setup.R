@@ -58,7 +58,8 @@ init_project <- function(quiet = FALSE) {
 #' Source every analysis module. Kept separate from init_project() so that
 #' individual modules can be sourced on their own during development.
 load_modules <- function(modules = c("io", "preprocess", "dimred", "annotate",
-                                     "trajectory", "de", "gsea", "plots")) {
+                                     "composition", "trajectory", "de", "gsea",
+                                     "plots")) {
   for (m in modules) source(project_path("R", paste0(m, ".R")))
   invisible(modules)
 }

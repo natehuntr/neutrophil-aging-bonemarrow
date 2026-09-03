@@ -11,7 +11,7 @@
 
 cran <- c(
   "yaml", "here", "dplyr", "tidyr", "tibble", "purrr", "readr", "glue",
-  "ggplot2", "patchwork", "pheatmap", "matrixStats", "Matrix",
+  "ggplot2", "patchwork", "pheatmap", "matrixStats", "Matrix", "scales",
   "Seurat", "SeuratObject", "R.utils", "ggVennDiagram", "clustree",
   "msigdbr", "remotes", "BiocManager"
 )

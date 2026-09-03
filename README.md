@@ -64,10 +64,17 @@ docs/               provenance and notes
 | 5 | `05_trajectory.R` | monocle3 trajectories per sex x age, tradeSeq GAMs |
 | 6 | `06_age_trends.R` | Spearman age trends and permutation-calibrated pairwise DE, per stage |
 | 7 | `07_glm_models.R` | NB-GLM omnibus, age x sex interaction, and the trajectory model |
-| 8 | `08_gsea.R` | sex x age interaction GSEA with sensitivity and per-age checks |
+| 8 | `08_gsea.R` | sex x age interaction GSEA, run within each maturation stage, with sensitivity and per-age checks |
+| 9 | `09_development_shifts.R` | stage composition across age, and where cells sit along the trajectory |
 
-Steps 1-3 must run in order. Steps 4-8 depend only on step 3 (and step 7 also
-on step 5), so they can be run individually as parameters are tuned.
+Steps 1-3 must run in order. Steps 4-9 depend only on step 3, except that
+steps 7 and 9 also use the trajectory built in step 5, so they can be run
+individually as parameters are tuned.
+
+Step 9 is the one that asks whether *development* moves rather than whether
+expression does — the stage mix and the distribution of cells along
+pseudotime. It is the most direct answer to the question the project was built
+around, so it is worth running even when the expression steps are not.
 
 Step 7 is by far the slowest: it refits every model `glm_de.n_perm` times to
 build the permutation null. Lower that value in the config for a quick pass.

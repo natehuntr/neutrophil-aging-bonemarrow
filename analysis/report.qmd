@@ -43,7 +43,8 @@ non-comparable.
 | Pseudotime trajectories | `05_trajectory.R` | `<sex>_<age>_trajectory_moran.csv` |
 | Age trends per stage | `06_age_trends.R` | `age_trend_<stage>_<sex>.csv` |
 | NB-GLM omnibus and interaction | `07_glm_models.R` | `omnibus_<sex>.csv` |
-| Sex x age GSEA | `08_gsea.R` | `gsea_sex_by_age_GOBP.csv` |
+| Sex x age GSEA, per stage | `08_gsea.R` | `gsea_sex_by_age_GOBP_<stage>.csv` |
+| Composition and trajectory shifts | `09_development_shifts.R` | `stage_age_trends.csv`, `pseudotime_shifts.csv` |
 
 ## Quality control
 
@@ -75,6 +76,49 @@ mapping cluster ids to maturation stages via
 numbering is not stable across Seurat versions**: if step 3 is re-run, check
 `results/figures/gmp_neutrophil_modules.pdf` against
 `gmp_neutrophil_clusters.pdf` before trusting the mapping.
+
+## Does development itself shift with age?
+
+Two things the expression analyses cannot see: whether the *mix* of maturation
+stages changes, and whether cells sit further along the trajectory. Both are
+compared across ages within a sex, which is the design-clean contrast.
+
+```{r composition}
+#| eval: !expr have("stage_age_trends.csv")
+comp <- read_result("stage_composition.csv")
+trends <- read_result("stage_age_trends.csv")
+
+knitr::kable(trends[order(-abs(trends$log_odds_per_step)),
+                    c("sex", "stage", "prop_first", "prop_last",
+                      "log_odds_per_step", "padj")],
+             row.names = FALSE, digits = 3,
+             caption = "Change in each stage's share per timepoint step")
+```
+
+`log_odds_per_step` is the slope of a stage's share against age rank: positive
+means that stage takes up more of the granulocytic compartment in older
+animals. `results/figures/stage_composition.pdf` and `stage_trends.pdf` show
+the same thing.
+
+```{r pseudotime-shift}
+#| eval: !expr have("pseudotime_shifts.csv")
+shifts <- read_result("pseudotime_shifts.csv")
+knitr::kable(shifts[, c("sex", "group", "n", "median_shift", "wasserstein",
+                        "frac_beyond_reference_median", "ks_padj")],
+             row.names = FALSE, digits = 3,
+             caption = "Pseudotime distribution relative to the youngest age")
+```
+
+`frac_beyond_reference_median` is the share of that group's cells sitting past
+the youngest group's median pseudotime; it is 0.5 for the reference by
+construction, so anything above that is cells having moved further along.
+`wasserstein` is the average shift in pseudotime units, which unlike the KS
+statistic is comparable between rows.
+
+The KS p-values are computed over cells, which are pseudoreplicates: read the
+distances, not the p-values. `potency_shifts.csv` asks the same question of
+CytoTRACE2 potency, which does not depend on where the trajectory root landed
+— if both move the same way, the shift is not an artefact of the fit.
 
 ## Sex differences within each age
 
@@ -112,14 +156,18 @@ Pseudobulk PCA per stage: `results/figures/pseudobulk_pca_by_stage.pdf`.
 
 ## Sex x age interaction
 
+Run separately within each maturation stage. Pooling stages would let a
+composition shift masquerade as a within-cell age trend.
+
 ```{r gsea}
-#| eval: !expr have("gsea_sex_by_age_GOBP.csv")
-gsea <- read_result("gsea_sex_by_age_GOBP.csv")
+#| eval: !expr have(sprintf("gsea_sex_by_age_GOBP_%s.csv", cfg$gsea$stages[1]))
+gsea <- read_result(sprintf("gsea_sex_by_age_GOBP_%s.csv", cfg$gsea$stages[1]))
 top <- gsea[gsea$padj < 0.05 & gsea$independent, ]
 knitr::kable(utils::head(top[, c("pathway", "NES", "padj", "signal_type",
                                  "dominant_pattern")], 20),
              row.names = FALSE, digits = 3,
-             caption = "Independent GO:BP hits, sex x age interaction")
+             caption = sprintf("Independent GO:BP hits, sex x age interaction (%s)",
+                               cfg$gsea$stages[1]))
 ```
 
 A positive NES means the age trajectory is **more positive in males** than in
@@ -131,8 +179,8 @@ abundant granule transcripts.
 
 ## Caveats
 
-- Cells are pseudoreplicates: each age/sex group is one pooled library, so
-  per-cell p-values overstate the evidence. Everything selected on a
+- Cells are pseudoreplicates: one hashtag per age means no biological
+  replication, so per-cell p-values overstate the evidence. Everything selected on a
   permutation-calibrated threshold (steps 6 and 7) accounts for this; anything
   selected on a BH-adjusted Wilcoxon p-value does not.
 - One 10x run per sex means sex is completely confounded with batch. Sex

@@ -95,6 +95,7 @@ These are gaps in the analysis, not in the design — the data supports all
 three, and each is closer to the question than some of what is already there.
 
 ### 3.1 Stage composition is never tested — the largest gap
+**Addressed** in `scripts/09_development_shifts.R`, part A.
 
 The most direct way neutrophil development changes with age is that the
 *proportions* of the stages shift: a shift toward immature cells is the
@@ -111,6 +112,7 @@ Without it, a strong result reported from the current pipeline could be
 composition in disguise. Which leads directly to:
 
 ### 3.2 Composition and cell-intrinsic change are not separated
+**Addressed**: step 8 now loops over `gsea.stages` and never pools them.
 
 Step 8 computes each sex's age trend on **mature and immature cells pooled**.
 If the immature fraction rises with age, a gene that is simply higher in
@@ -124,6 +126,7 @@ problem — they are stratified — which makes the inconsistency between step 6
 and step 8 worth resolving.
 
 ### 3.3 Nothing tests whether cells *move* differently along the trajectory
+**Addressed** in `scripts/09_development_shifts.R`, part B.
 
 Pseudotime is fitted and used to test gene expression, but the distribution of
 cells along it is never compared between groups. "Development changes with
@@ -180,15 +183,27 @@ is also a batch difference. The interaction analyses are the right way to make
 the least-bad cross-sex statement, and they should be reported as
 hypothesis-generating with the confound stated in the same sentence.
 
-**Best next work, in order of value per hour:**
+**Done since this was written:** §3.1, §3.2 and §3.3 are implemented — stage
+composition and trajectory position in step 9, and step 8 stratified by stage.
 
-1. Test stage composition by age (§3.1) — the most direct reading of the
-   question, and currently absent.
-2. Re-run the sex x age GSEA within a single stage (§3.2) — removes a
-   confound from the headline cross-sex result.
-3. Compare pseudotime and potency distributions across ages (§3.3).
-4. Drop or replace the per-age gene-list Venn (§3.4).
-5. For a publishable sex claim, there is no analysis: it needs libraries
+**Still open, in order of value per hour:**
+
+1. Drop or replace the per-age gene-list Venn (§3.4), which currently compares
+   power rather than biology.
+2. Exclude sex-chromosome genes from the per-age ranking (§3.5), where they
+   are guaranteed top hits that say nothing about granulopoiesis.
+3. Replace the hand-made cluster-to-stage mapping with a marker-score
+   assignment (§3.5), so staging survives a re-run.
+4. For a publishable sex claim, there is no analysis: it needs libraries
    containing both sexes, hashed the way the ages already are. Two more runs
    with sexes multiplexed within each would make the sex contrast as clean as
    the age contrast already is.
+
+**What to read first, now that step 9 exists.** `stage_age_trends.csv` and
+`pseudotime_shifts.csv` are the most direct answers to the question, and they
+are also the two results least dependent on modelling choices: a proportion
+and a distributional shift, both computed within a sex, where the design has
+no batch confound. If the composition shift and the pseudotime shift point the
+same way, and the potency shift agrees with them, that is a real finding about
+these animals. If they disagree, the expression-level results should be
+treated as unexplained until they are reconciled.

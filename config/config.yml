@@ -125,6 +125,11 @@ glm_de:
   pt_spline_df: 3
 
 gsea:
+  # Run the interaction GSEA separately within each of these stages, never on
+  # them pooled: if the immature fraction changes with age, a gene that is
+  # simply higher in immature cells shows an age trend in the pooled data
+  # while changing within neither stage.
+  stages: [mature, immature]
   min_pct_cells: 0.05
   min_set_size: 15
   max_set_size: 500

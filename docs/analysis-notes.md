@@ -9,6 +9,8 @@
 | `glm_lrt()` (step 7) | does the fitted NB model need an age term at all | permutation-calibrated p-value |
 | `run_interaction_gsea()` (step 8) | do the two sexes' age trajectories differ, pathway-wise | fgsea `padj`, then a granule sensitivity run |
 | `FindMarkers()` (step 4) | which genes differ between the sexes at one age | BH-adjusted Wilcoxon p |
+| `composition_age_test()` (step 9) | does the *mix* of maturation stages shift with age | log-odds slope per stage, BH-adjusted |
+| `compare_across_ages_by_sex()` (step 9) | do cells sit further along the trajectory | Wasserstein distance and median shift; KS p as a ranking |
 
 ## Pseudoreplication
 
@@ -43,6 +45,20 @@ positive because it rises in males, or because it falls in females, or both.
 `signal_type` and `dominant_pattern` in `gsea_sex_by_age_GOBP.csv` resolve
 this by going back to the two per-sex rho values for every leading-edge gene.
 Read those columns before writing a sentence about direction.
+
+## Composition versus cell-intrinsic change
+
+These are different findings and they are easy to confuse. "Gene X rises with
+age in neutrophils" can mean the gene rises inside each cell, or that the
+proportion of cells that express it highly has risen while no cell changed.
+
+Everything in step 6 is stratified by stage, so it measures the first. Step 9
+part A measures the second directly. Step 8 is stratified by stage for exactly
+this reason: run on pooled stages, every gene that differs between stages
+inherits an apparent age trend from a shift in the mix.
+
+When a gene appears in both, the honest description is that both are moving.
+When it appears only in the pooled analysis, it is composition.
 
 ## Cell numbers
 

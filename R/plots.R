@@ -158,3 +158,63 @@ plot_gene_venn <- function(gene_lists, title = "") {
     ggplot2::scale_fill_gradient(low = "white", high = "lightblue") +
     ggplot2::labs(title = title)
 }
+
+#' Stacked stage composition per age, one panel per sex.
+plot_stage_composition <- function(composition) {
+  ggplot2::ggplot(composition,
+                  ggplot2::aes(x = .data$age, y = .data$proportion, fill = .data$stage)) +
+    ggplot2::geom_col(width = 0.7) +
+    ggplot2::facet_wrap(~ sex) +
+    ggplot2::scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    ggplot2::labs(x = NULL, y = "Share of granulocytic cells", fill = "Stage",
+                  title = "Developmental stage composition by age") +
+    ggplot2::theme_minimal(base_size = 12)
+}
+
+#' Each stage's proportion against age, with Wilson intervals.
+#'
+#' The interval is the sampling error on the cells actually captured. It says
+#' nothing about how much this would vary between mice, which is the
+#' uncertainty that matters and which this design cannot estimate.
+plot_stage_trends <- function(composition) {
+  ggplot2::ggplot(composition,
+                  ggplot2::aes(x = .data$age, y = .data$proportion,
+                               colour = .data$sex, group = .data$sex)) +
+    ggplot2::geom_line() +
+    ggplot2::geom_point(size = 2) +
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = .data$ci_low, ymax = .data$ci_high),
+                           width = 0.15) +
+    ggplot2::facet_wrap(~ stage, scales = "free_y") +
+    ggplot2::scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    ggplot2::labs(x = NULL, y = "Share of granulocytic cells", colour = "Sex",
+                  title = "Stage proportions across age",
+                  caption = "Intervals are Wilson binomial CIs on captured cells, not between-animal variation") +
+    ggplot2::theme_minimal(base_size = 11)
+}
+
+#' ECDF of a per-cell quantity by age, one panel per sex.
+#'
+#' The ECDF is the right display for these comparisons: the KS statistic is the
+#' largest vertical gap between two of these curves, and a rightward shift is
+#' cells sitting further along the trajectory.
+plot_distribution_by_age <- function(values, meta, cfg, xlab,
+                                     age_levels = cfg$analysis$age_levels) {
+  df <- data.frame(value = values,
+                   age = factor(as.character(meta$age), levels = age_levels),
+                   sex = meta$sex)
+  df <- df[is.finite(df$value) & !is.na(df$age), ]
+
+  ecdf_plot <- ggplot2::ggplot(df, ggplot2::aes(.data$value, colour = .data$age)) +
+    ggplot2::stat_ecdf(linewidth = 0.7) +
+    ggplot2::facet_wrap(~ sex) +
+    ggplot2::labs(x = xlab, y = "Cumulative share of cells", colour = "Age") +
+    ggplot2::theme_minimal(base_size = 12)
+
+  density_plot <- ggplot2::ggplot(df, ggplot2::aes(.data$value, fill = .data$age)) +
+    ggplot2::geom_density(alpha = 0.35, colour = NA) +
+    ggplot2::facet_wrap(~ sex) +
+    ggplot2::labs(x = xlab, y = "Density", fill = "Age") +
+    ggplot2::theme_minimal(base_size = 12)
+
+  patchwork::wrap_plots(ecdf_plot, density_plot, ncol = 1)
+}

@@ -8,7 +8,7 @@
 
 REQUIRED_PACKAGES <- c(
   "Seurat", "Matrix", "dplyr", "tidyr", "tibble", "purrr", "ggplot2",
-  "patchwork", "matrixStats", "pheatmap", "yaml"
+  "patchwork", "matrixStats", "pheatmap", "yaml", "scales"
 )
 
 #' Attach the core packages, failing with a single actionable message if any

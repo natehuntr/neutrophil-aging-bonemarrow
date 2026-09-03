@@ -126,3 +126,122 @@ trajectory_by_group <- function(obj, cfg, group_cells, prefix,
 genes_unique_to <- function(gene_lists, target) {
   setdiff(gene_lists[[target]], unlist(gene_lists[names(gene_lists) != target]))
 }
+
+# ---------------------------------------------------------------------------
+# Where cells sit along the trajectory.
+#
+# The gene-level trajectory models ask whether a gene's profile along
+# pseudotime changes. They cannot see the other way development can change:
+# cells piling up before a maturation step, or traversing a compressed range.
+# That is a shift in the *distribution* of cells along pseudotime, and it is
+# what the functions below measure.
+#
+# The same pseudoreplication caveat applies as everywhere else: a KS test over
+# cells treats them as independent draws. The distances and median shifts are
+# the result; the p-values rank comparisons and nothing more.
+# ---------------------------------------------------------------------------
+
+#' 1-Wasserstein (earth mover's) distance between two samples.
+#'
+#' The mean absolute gap between the two quantile functions. Unlike the KS
+#' statistic it is in the units of the variable, so it can be compared across
+#' comparisons and is not driven by a single crossing point.
+wasserstein1 <- function(x, y, n_grid = 1000) {
+  x <- x[is.finite(x)]
+  y <- y[is.finite(y)]
+  if (!length(x) || !length(y)) return(NA_real_)
+  probs <- (seq_len(n_grid) - 0.5) / n_grid
+  mean(abs(stats::quantile(x, probs, names = FALSE, type = 7) -
+           stats::quantile(y, probs, names = FALSE, type = 7)))
+}
+
+#' Per-group summary of a distribution.
+distribution_summary <- function(values, groups, group_levels) {
+  do.call(rbind, lapply(group_levels, function(g) {
+    v <- values[groups == g]
+    v <- v[is.finite(v)]
+    if (!length(v)) return(NULL)
+    data.frame(group = g, n = length(v),
+               mean = mean(v), median = stats::median(v),
+               q25 = unname(stats::quantile(v, 0.25)),
+               q75 = unname(stats::quantile(v, 0.75)),
+               iqr = unname(diff(stats::quantile(v, c(0.25, 0.75)))),
+               stringsAsFactors = FALSE)
+  }))
+}
+
+#' Pairwise comparison of a distribution across groups.
+#'
+#' Every group is compared against `reference` (the first level by default),
+#' which keeps the comparisons interpretable as "shift away from baseline"
+#' rather than an all-pairs matrix that has to be read as a whole.
+#'
+#' `frac_beyond_reference_median` is the share of the group's cells sitting
+#' past the reference group's median. It is 0.5 for the reference by
+#' construction, so a value of 0.65 at 18m reads directly as "cells have moved
+#' further along the trajectory".
+compare_distributions <- function(values, groups, group_levels,
+                                  reference = group_levels[1]) {
+  groups <- as.character(groups)
+  ref_values <- values[groups == reference]
+  ref_values <- ref_values[is.finite(ref_values)]
+  if (!length(ref_values))
+    stop("reference group '", reference, "' has no finite values")
+  ref_median <- stats::median(ref_values)
+
+  res <- do.call(rbind, lapply(setdiff(group_levels, reference), function(g) {
+    v <- values[groups == g]
+    v <- v[is.finite(v)]
+    if (length(v) < 10) {
+      log_step("  skipping ", g, ": ", length(v), " cells")
+      return(NULL)
+    }
+    ks <- suppressWarnings(stats::ks.test(v, ref_values))
+    data.frame(
+      group = g, reference = reference, n = length(v), n_reference = length(ref_values),
+      median_shift = stats::median(v) - ref_median,
+      wasserstein = wasserstein1(v, ref_values),
+      frac_beyond_reference_median = mean(v > ref_median),
+      ks_statistic = unname(ks$statistic),
+      ks_p = ks$p.value,
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  if (!is.null(res)) res$ks_padj <- stats::p.adjust(res$ks_p, method = "BH")
+  res
+}
+
+#' Compare a per-cell quantity across ages, separately within each sex.
+#'
+#' Within-sex is the design-clean comparison: all ages share a library, so an
+#' age shift cannot be a batch shift. Comparing the same quantity between
+#' sexes would compare two libraries and is deliberately not done here.
+compare_across_ages_by_sex <- function(values, meta, cfg,
+                                       age_levels = cfg$analysis$age_levels,
+                                       age_col = "age", sex_col = "sex") {
+  summaries <- list()
+  shifts <- list()
+
+  for (this_sex in cfg$analysis$sex_levels) {
+    keep <- meta[[sex_col]] == this_sex & meta[[age_col]] %in% age_levels
+    keep[is.na(keep)] <- FALSE
+    if (sum(keep) < 30) {
+      log_step("skipping ", this_sex, ": ", sum(keep), " cells")
+      next
+    }
+    log_step("=== ", this_sex, " ===")
+
+    v <- values[keep]
+    g <- as.character(meta[[age_col]][keep])
+
+    s <- distribution_summary(v, g, age_levels)
+    if (!is.null(s)) { s$sex <- this_sex; summaries[[this_sex]] <- s }
+
+    d <- compare_distributions(v, g, age_levels)
+    if (!is.null(d)) { d$sex <- this_sex; shifts[[this_sex]] <- d }
+  }
+
+  list(summary = do.call(rbind, summaries),
+       shifts = do.call(rbind, shifts))
+}
