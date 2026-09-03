@@ -100,6 +100,16 @@ add_qc_metrics <- function(obj, cfg) {
 #' form their own pseudo-groups; they are dropped by filter_cells() regardless
 #' of what scDblFinder decides about them.
 add_doublet_calls <- function(obj) {
+  # scDblFinder runs `counts(sce) <- ...` internally, and that method needs
+  # `assay<-` resolvable through the search path. Checking here turns a
+  # confusing error raised deep inside another package into an actionable one,
+  # and costs nothing.
+  if (!exists("assay<-", mode = "function"))
+    stop("SummarizedExperiment is not attached, so scDblFinder will fail with\n",
+         '  Error in assay(object, "counts") <- value : ',
+         'could not find function "assay<-"\n',
+         "Call require_packages(\"SummarizedExperiment\") before this step.")
+
   sce <- SingleCellExperiment::SingleCellExperiment(
     list(counts = Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")))
   sce <- scDblFinder::scDblFinder(sce, samples = obj$MULTI_ID)

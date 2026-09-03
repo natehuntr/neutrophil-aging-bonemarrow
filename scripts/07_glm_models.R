@@ -29,7 +29,8 @@
 source(if (file.exists("R/setup.R")) "R/setup.R" else "../R/setup.R")
 cfg <- init_project()
 load_modules()
-require_packages("glmGamPoi", "monocle3", "splines", "SingleCellExperiment")
+require_packages("glmGamPoi", "monocle3", "splines",
+                 "SingleCellExperiment", "SummarizedExperiment")
 
 age_levels <- cfg$analysis$age_levels
 target_fdr <- cfg$glm_de$target_fdr

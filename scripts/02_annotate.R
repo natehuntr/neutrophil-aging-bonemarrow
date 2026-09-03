@@ -14,7 +14,8 @@
 source(if (file.exists("R/setup.R")) "R/setup.R" else "../R/setup.R")
 cfg <- init_project()
 load_modules()
-require_packages("SingleR", "celldex", "CytoTRACE2", "clustree")
+require_packages("SingleR", "celldex", "CytoTRACE2", "clustree",
+                 "SingleCellExperiment", "SummarizedExperiment")
 
 args <- commandArgs(trailingOnly = TRUE)
 sample_keys <- if (length(args)) args else names(cfg$samples)

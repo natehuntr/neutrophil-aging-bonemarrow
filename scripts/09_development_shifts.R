@@ -84,7 +84,7 @@ if (!file.exists(object_path(cfg, "combined_cds.rds"))) {
   log_step("combined_cds.rds not found -- run step 5 for the pseudotime half")
 } else {
   log_step("=== position along the trajectory ===")
-  require_packages("monocle3", "SummarizedExperiment")
+  require_packages("monocle3", "SingleCellExperiment", "SummarizedExperiment")
 
   combined_cds <- read_object(cfg, "combined_cds.rds")
   cd <- SummarizedExperiment::colData(combined_cds)

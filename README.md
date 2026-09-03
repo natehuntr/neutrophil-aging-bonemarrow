@@ -102,6 +102,26 @@ closest to the GMP cells — the standard monocle3 recipe. Pass
 `root_group = NULL` in an interactive session to choose the root by hand
 instead.
 
+## Troubleshooting
+
+**`could not find function "assay<-"`**, raised from inside `counts<-` or
+another Bioconductor call. The named package is not the problem;
+SummarizedExperiment is loaded but not *attached*. S4 method dispatch resolves
+generics through the search path, so calling everything as `Pkg::fun()` is not
+sufficient — a method running inside another package can still fail to find a
+generic it needs. `require_packages()` attaches rather than merely checking,
+and each step declares the packages it needs at the top of the script. If a
+new step hits this, add the package to that step's `require_packages()` call.
+
+**`FindClusters` fails on `algorithm = 4`.** That is Leiden, which needs the
+Python `leidenalg` package through reticulate. Set `clustering.algorithm: 1`
+in the config for Louvain, which needs nothing extra.
+
+**A step stalls with no output.** `monocle3::order_cells()` opens a Shiny
+window when it has no root. Every pipeline call passes `root_group`, so this
+should not happen in a batch run; if it does, the root selection is falling
+through — check that `fine_neu_labels` carries a `GMPs` level.
+
 ## Reading the results
 
 `docs/analysis-notes.md` covers what each statistic means, which comparisons

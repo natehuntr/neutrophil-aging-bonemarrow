@@ -25,12 +25,30 @@ load_packages <- function(extra = character()) {
   invisible(needed)
 }
 
-#' Stop early if an optional, step-specific package is absent.
+#' Attach the step-specific packages, failing early if any are absent.
+#'
+#' These are ATTACHED, not merely checked, and the difference matters. S4
+#' method dispatch in the Bioconductor stack resolves generics through the
+#' search path, so calling everything as `Pkg::fun()` is not enough: a method
+#' that runs inside another package can still fail to find a generic it needs.
+#'
+#' The concrete case that motivated this: scDblFinder internally runs
+#' `counts(sce) <- ...`, whose SingleCellExperiment method body calls
+#' `assay<-` from SummarizedExperiment. With SummarizedExperiment loaded but
+#' not attached, that lookup fails with
+#'   Error in assay(object, "counts") <- value :
+#'     could not find function "assay<-"
+#' which points at a package the calling code never mentions. Attaching
+#' SummarizedExperiment fixes it. The same applies to monocle3 and
+#' SingleCellExperiment generics elsewhere in the pipeline.
 require_packages <- function(...) {
   pkgs <- c(...)
   missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
   if (length(missing))
     stop("this step needs: ", paste(missing, collapse = ", "),
          "\nRun: Rscript scripts/00_install_dependencies.R")
-  invisible(TRUE)
+
+  suppressPackageStartupMessages(
+    for (p in pkgs) library(p, character.only = TRUE))
+  invisible(pkgs)
 }

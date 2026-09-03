@@ -23,7 +23,8 @@
 source(if (file.exists("R/setup.R")) "R/setup.R" else "../R/setup.R")
 cfg <- init_project()
 load_modules()
-require_packages("monocle3", "SeuratWrappers", "tradeSeq", "SingleCellExperiment")
+require_packages("monocle3", "SeuratWrappers", "tradeSeq",
+                 "SingleCellExperiment", "SummarizedExperiment")
 
 age_levels <- cfg$analysis$age_levels
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")

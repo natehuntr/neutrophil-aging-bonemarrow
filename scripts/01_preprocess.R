@@ -18,6 +18,10 @@
 source(if (file.exists("R/setup.R")) "R/setup.R" else "../R/setup.R")
 cfg <- init_project()
 load_modules()
+# SummarizedExperiment and SingleCellExperiment must be ATTACHED, not just
+# installed: scDblFinder relies on S4 generics resolved through the search
+# path. See the note in R/packages.R.
+require_packages("scDblFinder", "SingleCellExperiment", "SummarizedExperiment")
 
 args <- commandArgs(trailingOnly = TRUE)
 sample_keys <- if (length(args)) args else names(cfg$samples)
