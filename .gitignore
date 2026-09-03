@@ -1,0 +1,18 @@
+# Data and results are large and reproducible; they stay out of git.
+data/*
+!data/README.md
+results/objects/*
+results/tables/*
+results/figures/*
+!results/**/.gitkeep
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*_cache/
+*_files/
+analysis/*.html
+
+.DS_Store

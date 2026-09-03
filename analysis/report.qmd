@@ -1,0 +1,145 @@
+---
+title: "Neutrophil ageing in mouse bone marrow"
+subtitle: "CITE-seq, male and female, 3-18 months"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+#| include: false
+source(here::here("R", "setup.R"))
+cfg <- init_project(quiet = TRUE)
+load_modules()
+
+# The report reads what the pipeline wrote. It does not recompute anything:
+# run `Rscript scripts/run_all.R` first.
+have <- function(name) file.exists(table_path(cfg, name)) ||
+                       file.exists(object_path(cfg, name))
+read_result <- function(name) utils::read.csv(table_path(cfg, name))
+```
+
+## Design
+
+Two hashed CITE-seq runs, one per sex, each multiplexing four ages
+(`r paste(cfg$analysis$all_age_levels, collapse = ", ")`) across four hashtag
+oligos. Every cross-age comparison below uses
+`r paste(cfg$analysis$age_levels, collapse = ", ")` only: 9m is not populated
+in every cell-type stratum, and including it would make the strata
+non-comparable.
+
+| Step | Script | Output |
+|---|---|---|
+| Preprocess (SoupX, ADT/HTO, QC, doublets) | `01_preprocess.R` | `<sex>_filtered.rds` |
+| Reductions, SingleR, stem/neutrophil subset | `02_annotate.R` | `<sex>_annotated.rds`, `<sex>_neustem.rds` |
+| Merge sexes, stage the granulocytes | `03_merge.R` | `gmp_neutrophils.rds` |
+| Male vs female within age | `04_sex_differences.R` | `degs_<age>_<assay>.csv` |
+| Pseudotime trajectories | `05_trajectory.R` | `<sex>_<age>_trajectory_moran.csv` |
+| Age trends per stage | `06_age_trends.R` | `age_trend_<stage>_<sex>.csv` |
+| NB-GLM omnibus and interaction | `07_glm_models.R` | `omnibus_<sex>.csv` |
+| Sex x age GSEA | `08_gsea.R` | `gsea_sex_by_age_GOBP.csv` |
+
+## Quality control
+
+```{r qc}
+#| eval: !expr file.exists(object_path(cfg, "gmp_neutrophils.rds"))
+gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
+knitr::kable(table(gmp_neu$fine_neu_labels, gmp_neu$sex),
+             caption = "Cells per developmental stage and sex")
+knitr::kable(table(gmp_neu$age, gmp_neu$sex),
+             caption = "Cells per age and sex")
+```
+
+Per-sample QC distributions and doublet scores are in
+`results/figures/<sex>_qc.pdf` and `<sex>_doublets.pdf`.
+
+## Granulopoiesis
+
+```{r stages}
+#| eval: !expr exists("gmp_neu")
+#| fig-width: 12
+#| fig-height: 5
+Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "fine_neu_labels") +
+  Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "sex")
+```
+
+Stage labels come from clustering the merged GMP + neutrophil object and
+mapping cluster ids to maturation stages via
+`analysis.neutrophil_cluster_labels` in `config/config.yml`. **Cluster
+numbering is not stable across Seurat versions**: if step 3 is re-run, check
+`results/figures/gmp_neutrophil_modules.pdf` against
+`gmp_neutrophil_clusters.pdf` before trusting the mapping.
+
+## Sex differences within each age
+
+```{r sex-degs}
+#| eval: !expr have(sprintf("degs_%s_RNA.csv", cfg$analysis$age_levels[1]))
+degs <- lapply(stats::setNames(cfg$analysis$age_levels, cfg$analysis$age_levels),
+               function(a) read_result(sprintf("degs_%s_RNA.csv", a)))
+
+summary_tbl <- data.frame(
+  age = names(degs),
+  up_in_male   = vapply(degs, function(d) sum(d$p_val_adj < 0.05 & d$avg_log2FC > 0), integer(1)),
+  up_in_female = vapply(degs, function(d) sum(d$p_val_adj < 0.05 & d$avg_log2FC < 0), integer(1))
+)
+knitr::kable(summary_tbl, row.names = FALSE,
+             caption = "Significant genes by direction (ident.1 = male)")
+```
+
+## Age trends by stage
+
+```{r age-trends}
+#| eval: !expr have(sprintf("age_trend_mature_%s.csv", cfg$analysis$sex_levels[1]))
+files <- list.files(cfg$paths$tables, pattern = "^age_trend_.*\\.csv$", full.names = TRUE)
+trend_summary <- do.call(rbind, lapply(files, function(f) {
+  parts <- strsplit(sub("\\.csv$", "", basename(f)), "_")[[1]]
+  d <- utils::read.csv(f)
+  data.frame(stage = parts[3], sex = parts[4], n_changing = nrow(d))
+}))
+knitr::kable(trend_summary, row.names = FALSE,
+             caption = sprintf("Genes with |rho| > %.2f against age",
+                               cfg$age_trend$rho_cutoff))
+```
+
+Effect-size distributions for the two sexes: `results/figures/rho_distributions.pdf`.
+Pseudobulk PCA per stage: `results/figures/pseudobulk_pca_by_stage.pdf`.
+
+## Sex x age interaction
+
+```{r gsea}
+#| eval: !expr have("gsea_sex_by_age_GOBP.csv")
+gsea <- read_result("gsea_sex_by_age_GOBP.csv")
+top <- gsea[gsea$padj < 0.05 & gsea$independent, ]
+knitr::kable(utils::head(top[, c("pathway", "NES", "padj", "signal_type",
+                                 "dominant_pattern")], 20),
+             row.names = FALSE, digits = 3,
+             caption = "Independent GO:BP hits, sex x age interaction")
+```
+
+A positive NES means the age trajectory is **more positive in males** than in
+females. It does not mean the pathway is higher in males, and it does not mean
+males age faster: `signal_type` and `dominant_pattern` say which of those the
+leading edge actually supports. Pathways to report are the ones flagged
+`robust` in `gsea_sensitivity_comparison.csv`, which survive removing the
+abundant granule transcripts.
+
+## Caveats
+
+- Cells are pseudoreplicates: each age/sex group is one pooled library, so
+  per-cell p-values overstate the evidence. Everything selected on a
+  permutation-calibrated threshold (steps 6 and 7) accounts for this; anything
+  selected on a BH-adjusted Wilcoxon p-value does not.
+- One 10x run per sex means sex is completely confounded with batch. Sex
+  differences here cannot be separated from run-to-run technical variation.
+- SoupX contamination is estimated in step 1 but, by default, not applied
+  downstream. See `soupx.use_corrected_counts` in the config.
+
+```{r session}
+sessionInfo()
+```

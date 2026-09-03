@@ -1,0 +1,146 @@
+# ---------------------------------------------------------------------------
+# Project configuration.
+#
+# Every path is relative to the project root, so the folder can be moved or
+# cloned anywhere and still run. The only thing that has to point outside the
+# project is `paths.cellranger_root`, which is where the Cell Ranger
+# per-sample outputs live; either copy/symlink them into ./data or set an
+# absolute path here.
+# ---------------------------------------------------------------------------
+
+project: neutrophil-aging-bonemarrow
+seed: 42
+
+paths:
+  cellranger_root: data/per_sample_outs
+  raw_matrix_dir: sample_raw_feature_bc_matrix
+  filtered_matrix_dir: sample_filtered_feature_bc_matrix
+  objects: results/objects
+  tables: results/tables
+  figures: results/figures
+
+# ---------------------------------------------------------------------------
+# Samples. One CITE-seq/hashed 10x run per sex; ages are multiplexed within a
+# run via the hashtag oligos listed in `hashtags`.
+# ---------------------------------------------------------------------------
+samples:
+  male:
+    sample_id: MCC8209A3_Male_BM_3
+    sex: male
+    hashtags:
+      Ms.Hashtag1: 3m
+      Ms.Hashtag2: 9m
+      Ms.Hashtag3: 12m
+      Ms.Hashtag4: 18m
+    # Per-sample tuning. These were hand-picked from elbow plots in the
+    # original notebook; they are the only numbers that differed between the
+    # male and female arms.
+    dims:
+      rna_pca: 15
+      sct_pca: 30
+      neustem_rna_pca: 10
+      neustem_adt_pca: 15
+      wnn_rna: 20
+      wnn_adt: 20
+  female:
+    sample_id: MCC8209A4_Female_BM_4
+    sex: female
+    hashtags:
+      Ms.Hashtag1: 3m
+      Ms.Hashtag2: 9m
+      Ms.Hashtag3: 12m
+      Ms.Hashtag4: 18m
+    dims:
+      rna_pca: 15
+      sct_pca: 20
+      neustem_rna_pca: 5
+      neustem_adt_pca: 10
+      wnn_rna: 5
+      wnn_adt: 10
+
+# ---------------------------------------------------------------------------
+# Ambient RNA correction
+#
+# NOTE ON REPRODUCIBILITY: the original notebook ran SoupX and then built the
+# analysis object from the *uncorrected* filtered counts, so the correction
+# never reached any downstream result. `use_corrected_counts: false` keeps
+# that behaviour so numbers match the original run. Set it to true to
+# actually use the SoupX-adjusted counts (recommended, but it will change
+# every downstream number).
+# ---------------------------------------------------------------------------
+soupx:
+  run: true
+  use_corrected_counts: false
+  quick_cluster_dims: 30
+  quick_cluster_resolution: 0.5
+
+adt:
+  isotype_pattern: "^Isotype"
+  # Antibodies whose signal is dominated by a bimodal background; listed for
+  # reference in the ADT age-trend analysis.
+  granule_markers: []
+
+qc:
+  mito_pattern: "^mt-"
+  ribo_pattern: "^Rp[sl]"
+  hb_pattern: "^(Hba|Hbb)"
+  min_log10_genes_per_umi: 0.8
+  max_mito_ratio: 0.2
+  max_percent_hb: 10
+
+clustering:
+  resolution_grid: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6]
+  chosen_resolution: 0.4
+
+annotation:
+  singler_ref: immgen
+  singler_ref_version: "2024-02-26"
+  # Fine-label prefixes kept for the stem-cell/neutrophil subset.
+  neustem_label_pattern: "^Neutrophils|^Stem cells"
+  cytotrace_species: mouse
+
+analysis:
+  # 9m was dropped from every cross-age comparison in the original analysis:
+  # it is not present in all cell-type strata.
+  age_levels: [3m, 12m, 18m]
+  all_age_levels: [3m, 9m, 12m, 18m]
+  sex_levels: [female, male]
+  # Clusters of the merged GMP+neutrophil object -> developmental stage.
+  # Re-check these against the cluster plot if the merge is ever re-run:
+  # cluster numbering is not stable across Seurat versions.
+  neutrophil_cluster_labels:
+    "0": proNeu
+    "1": immature
+    "2": proNeu2
+    "3": mature
+    "4": preNeu
+    "5": GMPs
+    "6": proNeu
+    "7": mature
+  stage_levels: [GMPs, proNeu, proNeu2, preNeu, immature, mature]
+
+age_trend:
+  rho_cutoff: 0.1
+  n_clusters: 6
+  shape_tolerance: 0.5
+
+permutation_de:
+  min_cells: 10
+  min_frac: 0.10
+  n_perm: 20
+  quantile: 0.95
+  adt_min_median: 0
+
+glm_de:
+  min_cells_detected: 10
+  n_perm: 50
+  target_fdr: 0.05
+  pt_spline_df: 3
+
+gsea:
+  min_pct_cells: 0.05
+  min_set_size: 15
+  max_set_size: 500
+  rho_flat: 0.10
+  collection: C5
+  subcollection: "GO:BP"
