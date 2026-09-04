@@ -146,6 +146,15 @@ object in step 3; both now verify it rather than passing the problem on.
 Filters report a per-condition breakdown when they empty out, so the error
 names the condition that did it.
 
+**`Tibble columns must have compatible sizes`** from inside `tradeSeq::fitGAM`.
+tradeSeq drops cells it cannot model — no finite pseudotime, or zero counts
+across the genes supplied — but passes `conditions` through untouched, so a
+conditions vector built from the unfiltered object arrives longer than the
+model matrix and the fit dies in a `tibble()` call several frames down. Step 5
+now filters counts, pseudotime, weights and conditions to one common set of
+cells and asserts they agree before calling `fitGAM`. Cells at a timepoint
+outside `analysis.age_levels` are the usual source: they become NA conditions.
+
 **`FindClusters` fails on `algorithm = 4`.** That is Leiden, which needs the
 Python `leidenalg` package through reticulate. Set `clustering.algorithm: 1`
 in the config for Louvain, which needs nothing extra.

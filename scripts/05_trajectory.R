@@ -59,8 +59,16 @@ for (sex in cfg$analysis$sex_levels) {
 }
 
 # --- 2. Combined trajectory across both sexes ------------------------------
+# Restricted to analysis.age_levels. Every comparison built on this object
+# drops the excluded timepoint anyway, and leaving it in produces cells whose
+# age factor is NA, which tradeSeq silently drops from the model while keeping
+# the conditions vector full length.
 log_step("=== combined trajectory ===")
-combined_cds <- to_cds(gmp_neu)
+combined <- select_cells(gmp_neu, list(
+  "age is one of analysis.age_levels" = gmp_neu$age %in% age_levels
+), context = "combined trajectory input")
+
+combined_cds <- to_cds(combined)
 combined_cds <- learn_trajectory(combined_cds, use_partition = FALSE, ncenter = 300,
                                  root_group = "GMPs")
 save_object(combined_cds, cfg, "combined_cds.rds")
@@ -74,30 +82,71 @@ if (length(all_sig_genes) < 10)
        "per-age trajectory; there is nothing to fit. Check the trajectories in ",
        "results/tables/*_trajectory_moran.csv before going further.")
 
+# Pseudotime is read once from the full object and indexed by cell name below.
+# Reading it from a subset cds relies on monocle3 having subset the principal
+# graph's auxiliary data alongside the cells, which is not something to lean on.
+pseudotime_all <- monocle3::pseudotime(combined_cds)
+
 # --- 3. Per-sex tradeSeq GAMs, conditioned on age -------------------------
 # Each sex is fitted separately on the shared pseudotime axis; `conditions`
 # is age, so the smoothers can be compared across timepoints within a sex.
+#
+# Every input is filtered to one common set of cells before fitGAM is called.
+# tradeSeq drops cells it cannot model -- no finite pseudotime, or zero counts
+# across the genes supplied -- but passes `conditions` through untouched, so a
+# vector built from the unfiltered object arrives longer than the model matrix
+# and the fit dies inside a tibble() call.
 for (sex in cfg$analysis$sex_levels) {
   log_step("fitting GAM: ", sex)
-  cds_sex <- combined_cds[, SummarizedExperiment::colData(combined_cds)$sex == sex]
 
-  pt <- monocle3::pseudotime(cds_sex)
-  finite <- is.finite(pt)
-  cds_sex <- cds_sex[, finite]
-  pt <- pt[finite]
+  cell_data <- SummarizedExperiment::colData(combined_cds)
+  sex_cells <- colnames(combined_cds)[cell_data$sex == sex]
+  if (length(sex_cells) < 50) {
+    warning(sex, ": only ", length(sex_cells), " cells; skipping the GAM")
+    next
+  }
 
-  ages_present <- table(SummarizedExperiment::colData(cds_sex)$age)
+  counts_sex <- SingleCellExperiment::counts(combined_cds)[all_sig_genes, sex_cells,
+                                                           drop = FALSE]
+  pt <- pseudotime_all[sex_cells]
+  age <- factor(as.character(cell_data[sex_cells, "age"]), levels = age_levels)
+
+  usable <- is.finite(pt) & !is.na(age) & Matrix::colSums(counts_sex) > 0
+  dropped <- sum(!usable)
+  if (dropped)
+    log_step(sprintf("  dropping %d of %d cells (no finite pseudotime, no age, ",
+                     dropped, length(usable)),
+             "or no counts across the selected genes)")
+
+  counts_sex <- counts_sex[, usable, drop = FALSE]
+  pt <- pt[usable]
+  age <- droplevels(age[usable])
+  weights <- rep(1, ncol(counts_sex))
+
+  # tradeSeq reports a size mismatch from deep inside a tibble() call, so it is
+  # worth catching here where the cause is visible.
+  stopifnot(length(pt) == ncol(counts_sex),
+            length(age) == ncol(counts_sex),
+            length(weights) == ncol(counts_sex))
+
+  ages_present <- table(age)
+  log_step("  cells per age: ",
+           paste(names(ages_present), ages_present, sep = "=", collapse = ", "))
+  if (length(ages_present) < 2) {
+    warning(sex, ": fewer than two ages have cells; conditionTest needs at ",
+            "least two. Skipping.")
+    next
+  }
   if (any(ages_present < 20))
-    warning(sex, ": ", paste(names(ages_present), ages_present, sep = "=",
-                             collapse = ", "),
-            " cells per age -- the condition smoothers will be unstable")
+    warning(sex, ": some ages have under 20 cells -- the condition smoothers ",
+            "will be unstable")
 
   gam <- tradeSeq::fitGAM(
-    counts = SingleCellExperiment::counts(cds_sex)[all_sig_genes, , drop = FALSE],
+    counts = counts_sex,
     pseudotime = pt,
-    cellWeights = rep(1, ncol(cds_sex)),
+    cellWeights = weights,
     nknots = 5,
-    conditions = factor(SummarizedExperiment::colData(cds_sex)$age, levels = age_levels)
+    conditions = age
   )
   save_object(gam, cfg, paste0(sex, "_GAM.rds"))
 
