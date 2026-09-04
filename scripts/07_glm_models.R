@@ -41,10 +41,12 @@ n_perm <- cfg$glm_de$n_perm
 # ===========================================================================
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
 
-keep <- !is.na(gmp_neu$CytoTRACE2_Potency) &
-  gmp_neu$CytoTRACE2_Potency == "Differentiated" &
-  gmp_neu$age %in% age_levels
-neus <- subset(gmp_neu, cells = colnames(gmp_neu)[keep])
+require_metadata(gmp_neu, c("CytoTRACE2_Potency", "age", "sex"), context = "step 7")
+
+neus <- select_cells(gmp_neu, list(
+  "CytoTRACE2_Potency is Differentiated" = gmp_neu$CytoTRACE2_Potency == "Differentiated",
+  "age is one of analysis.age_levels"    = gmp_neu$age %in% age_levels
+), context = "differentiated neutrophils")
 neus <- join_layers(neus)
 Seurat::DefaultAssay(neus) <- "RNA"
 

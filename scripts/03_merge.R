@@ -28,23 +28,50 @@ neustem   <- lapply(stats::setNames(sample_keys, sample_keys),
                     function(k) read_object(cfg, paste0(k, "_neustem.rds")))
 
 # --- carry the potency calls back onto the full objects --------------------
-cytotrace_cols <- c("CytoTRACE2_Score", "CytoTRACE2_Potency",
-                    "CytoTRACE2_Relative", "preKNN_CytoTRACE2_Score",
-                    "preKNN_CytoTRACE2_Potency")
+#' Copy columns from a subset back onto the full object, by cell name.
+#'
+#' Cells absent from the subset get NA. A requested column that the subset does
+#' not have is reported rather than silently skipped: downstream steps select
+#' on CytoTRACE2_Potency, and if it never arrives they fail with an empty
+#' subset three steps from here.
+transfer_metadata <- function(target, source, columns, label = "") {
+  absent <- setdiff(columns, colnames(source@meta.data))
+  if (length(absent))
+    warning(label, ": column(s) not present on the subset and so not ",
+            "transferred: ", paste(absent, collapse = ", "))
 
-transfer_metadata <- function(target, source, columns) {
-  columns <- intersect(columns, colnames(source@meta.data))
-  for (col in columns) {
+  idx <- match(colnames(source), colnames(target))
+  matched <- !is.na(idx)
+  if (!any(matched))
+    stop(label, ": no cell names in common between the subset and the full ",
+         "object, so nothing can be transferred. Were they built from ",
+         "different runs of step 2?")
+
+  for (col in intersect(columns, colnames(source@meta.data))) {
     values <- rep(NA, ncol(target))
-    idx <- match(colnames(source), colnames(target))
-    values[idx[!is.na(idx)]] <- source@meta.data[[col]][!is.na(idx)]
+    values[idx[matched]] <- source@meta.data[[col]][matched]
     target[[col]] <- values
   }
   target
 }
 
 for (key in sample_keys)
-  annotated[[key]] <- transfer_metadata(annotated[[key]], neustem[[key]], cytotrace_cols)
+  annotated[[key]] <- transfer_metadata(annotated[[key]], neustem[[key]],
+                                        CYTOTRACE_COLUMNS, label = key)
+
+# Steps 4 and 7 select differentiated cells on this column, so confirm it
+# arrived here rather than discovering it two steps downstream.
+for (key in sample_keys) {
+  coverage <- metadata_coverage(annotated[[key]], CYTOTRACE_COLUMNS)
+  log_step(key, ": CytoTRACE2 coverage after transfer")
+  print(coverage, row.names = FALSE)
+
+  potency <- coverage$non_na[coverage$column == "CytoTRACE2_Potency"]
+  if (is.na(potency) || potency == 0)
+    stop(key, ": no cell has a CytoTRACE2_Potency value after the transfer.\n",
+         "Steps 4 and 7 select on it, so they would fail with an empty subset.\n",
+         "Re-run step 2 for this sample and check the CytoTRACE2 output.")
+}
 
 # --- all cells, both sexes -------------------------------------------------
 log_step("=== merging all cells ===")
@@ -59,9 +86,12 @@ save_object(bm_merged, cfg, "bm_merged.rds")
 log_step("=== merging GMPs and neutrophils ===")
 granulo_labels <- c("Granulocyte-Monocyte Progenitor (GMP)", "Neutrophils")
 
-subsets <- lapply(neustem, function(obj) {
-  keep <- as.character(obj$fine_label_readable) %in% granulo_labels
-  subset(obj, cells = colnames(obj)[keep])
+subsets <- lapply(names(neustem), function(key) {
+  obj <- neustem[[key]]
+  select_cells(obj, list(
+    "fine_label_readable is a GMP or neutrophil" =
+      as.character(obj$fine_label_readable) %in% granulo_labels
+  ), context = paste(key, "GMPs and neutrophils"))
 })
 
 gmp_neu <- merge(subsets[[1]], y = subsets[-1], merge.data = TRUE)

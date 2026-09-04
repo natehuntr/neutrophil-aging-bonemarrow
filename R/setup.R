@@ -133,3 +133,86 @@ sample_config <- function(cfg, key) {
   s$key <- key
   s
 }
+
+# ---------------------------------------------------------------------------
+# Object helpers
+#
+# These exist because of a specific failure mode. A missing metadata column
+# does not error in R: `obj$absent == "x"` returns logical(0), and
+# `TRUE & logical(0)` is logical(0), so one absent column silently empties an
+# entire multi-condition filter. subset() then reports "No cells found", which
+# points at the data when the actual problem is a column an earlier step never
+# wrote. select_cells() turns that into a message naming the condition.
+# ---------------------------------------------------------------------------
+
+#' Stop unless the object carries these metadata columns.
+require_metadata <- function(obj, columns, context = "this step") {
+  absent <- setdiff(columns, colnames(obj@meta.data))
+  if (length(absent))
+    stop(context, " needs metadata column(s) the object does not have: ",
+         paste(absent, collapse = ", "),
+         "\nThe object has: ", paste(colnames(obj@meta.data), collapse = ", "),
+         "\nAn earlier pipeline step should have written them; re-run it and ",
+         "check its output for warnings.")
+  invisible(TRUE)
+}
+
+#' Subset to cells passing every named condition, reporting the breakdown.
+#'
+#' @param conditions named list of logical vectors, one value per cell. NA
+#'   counts as a failure. The names are what gets reported, so make them read
+#'   like the condition they describe.
+select_cells <- function(obj, conditions, context = "subset", quiet = FALSE) {
+  n <- ncol(obj)
+
+  wrong_length <- vapply(conditions, function(x) length(x) != n, logical(1))
+  if (any(wrong_length))
+    stop(context, ": condition(s) [",
+         paste(names(conditions)[wrong_length], collapse = ", "),
+         "] produced ",
+         paste(vapply(conditions[wrong_length], length, integer(1)), collapse = "/"),
+         " values for ", n, " cells.",
+         "\nA metadata column that does not exist yields a zero-length ",
+         "condition, which would otherwise empty the filter silently. ",
+         "Check that the column names in this filter exist on the object.")
+
+  passes <- lapply(conditions, function(x) !is.na(x) & x)
+
+  # Cumulative counts show which condition does the damage, which a per-
+  # condition count alone does not.
+  cumulative <- Reduce(`&`, passes, accumulate = TRUE)
+  report <- data.frame(
+    condition = names(conditions),
+    passing = vapply(passes, sum, integer(1)),
+    remaining = vapply(cumulative, sum, integer(1)),
+    row.names = NULL
+  )
+
+  keep <- cumulative[[length(cumulative)]]
+  if (!any(keep)) {
+    stop(context, ": no cells passed all conditions (starting from ", n, ").\n",
+         paste(utils::capture.output(print(report, row.names = FALSE)),
+               collapse = "\n"),
+         "\nThe first row where `remaining` hits 0 is the condition to look at.")
+  }
+
+  if (!quiet) {
+    log_step(context, ": ", sum(keep), " of ", n, " cells")
+    print(report, row.names = FALSE)
+  }
+  subset(obj, cells = colnames(obj)[keep])
+}
+
+#' How many cells carry a non-NA value for each column.
+metadata_coverage <- function(obj, columns) {
+  present <- intersect(columns, colnames(obj@meta.data))
+  data.frame(
+    column = columns,
+    present = columns %in% present,
+    non_na = vapply(columns, function(col) {
+      if (!col %in% present) return(NA_integer_)
+      sum(!is.na(obj@meta.data[[col]]))
+    }, integer(1)),
+    row.names = NULL
+  )
+}

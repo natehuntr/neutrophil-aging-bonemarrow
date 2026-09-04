@@ -62,12 +62,43 @@ add_readable_labels <- function(obj, map = IMMGEN_LABEL_MAP,
   obj
 }
 
+#' Columns CytoTRACE2 is expected to contribute. Steps 4 and 7 select
+#' differentiated cells on CytoTRACE2_Potency, so its absence is fatal there.
+CYTOTRACE_COLUMNS <- c("CytoTRACE2_Score", "CytoTRACE2_Potency",
+                       "CytoTRACE2_Relative", "preKNN_CytoTRACE2_Score",
+                       "preKNN_CytoTRACE2_Potency")
+
 #' Developmental potency per cell (CytoTRACE2).
+#'
+#' The result is verified rather than trusted: if CytoTRACE2 returns columns
+#' under different names, or covers only some cells, AddMetaData succeeds
+#' quietly and the problem only surfaces two steps later as an empty subset.
 run_cytotrace2 <- function(obj, cfg, assay = "RNA") {
   expr <- as.matrix(Seurat::GetAssayData(obj, assay = assay, layer = "counts"))
   result <- CytoTRACE2::cytotrace2(expr, is_seurat = FALSE,
                                    species = cfg$annotation$cytotrace_species)
-  Seurat::AddMetaData(obj, metadata = result)
+
+  if (!"CytoTRACE2_Potency" %in% colnames(result))
+    stop("CytoTRACE2 returned no CytoTRACE2_Potency column. It returned: ",
+         paste(colnames(result), collapse = ", "),
+         "
+Steps 4 and 7 select cells on that column, so the pipeline cannot ",
+         "continue without it. Check the CytoTRACE2 version.")
+
+  overlap <- length(intersect(rownames(result), colnames(obj)))
+  if (overlap < ncol(obj))
+    warning("CytoTRACE2 returned values for ", overlap, " of ", ncol(obj),
+            " cells; the rest will carry NA potency")
+
+  obj <- Seurat::AddMetaData(obj, metadata = result)
+
+  scored <- sum(!is.na(obj$CytoTRACE2_Potency))
+  log_step(sprintf("CytoTRACE2: %d of %d cells scored", scored, ncol(obj)))
+  if (scored == 0)
+    stop("CytoTRACE2 produced no usable potency calls after AddMetaData. ",
+         "This is usually a cell-name mismatch between the result and the object.")
+  print(table(obj$CytoTRACE2_Potency, useNA = "ifany"))
+  obj
 }
 
 #' Marker modules for the granulocyte maturation series.

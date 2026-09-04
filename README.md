@@ -66,6 +66,7 @@ docs/               provenance and notes
 | 7 | `07_glm_models.R` | NB-GLM omnibus, age x sex interaction, and the trajectory model |
 | 8 | `08_gsea.R` | sex x age interaction GSEA, run within each maturation stage, with sensitivity and per-age checks |
 | 9 | `09_development_shifts.R` | stage composition across age, and where cells sit along the trajectory |
+| - | `diagnose.R` | inspects the saved objects and reports what any later step would fail on |
 
 Steps 1-3 must run in order. Steps 4-9 depend only on step 3, except that
 steps 7 and 9 also use the trajectory built in step 5, so they can be run
@@ -132,6 +133,18 @@ them Seurat re-exports varies between v5 releases. `seurat_fn()` in
 `R/dimred.R` looks in both namespaces; use it (or `join_layers()` /
 `assay_names()`, which are built on it) rather than hard-coding
 `Seurat::thing` for anything that originates in SeuratObject.
+
+**`No cells found` from `subset()`.** Run `Rscript scripts/diagnose.R`: it
+reports every saved object's cell count and, for each metadata column the
+later steps select on, how many cells carry a value. A column marked absent or
+`non_na = 0` is the cause, and the step that should have written it is the one
+to re-run.
+
+The usual culprit is `CytoTRACE2_Potency`, which steps 4 and 7 use to pick
+differentiated cells. It is written in step 2 and copied onto the merged
+object in step 3; both now verify it rather than passing the problem on.
+Filters report a per-condition breakdown when they empty out, so the error
+names the condition that did it.
 
 **`FindClusters` fails on `algorithm = 4`.** That is Leiden, which needs the
 Python `leidenalg` package through reticulate. Set `clustering.algorithm: 1`

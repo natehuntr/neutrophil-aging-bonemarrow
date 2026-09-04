@@ -23,13 +23,18 @@ require_packages("clusterProfiler", "org.Mm.eg.db")
 age_levels <- cfg$analysis$age_levels
 bm <- read_object(cfg, "bm_merged.rds")
 
-# Differentiated neutrophils only. Cells with no potency call (outside the
-# stem/neutrophil subset scored in step 2) are excluded by the NA test.
-keep <- bm$singleR_main_label == "Neutrophils" &
-  !is.na(bm$CytoTRACE2_Potency) & bm$CytoTRACE2_Potency == "Differentiated" &
-  bm$age %in% age_levels
-neutrophils <- subset(bm, cells = colnames(bm)[keep])
-log_step(sprintf("differentiated neutrophils: %d cells", ncol(neutrophils)))
+# Differentiated neutrophils only. Cells with no potency call sit outside the
+# stem/neutrophil subset that step 2 scored, and are excluded by the NA rule
+# inside select_cells().
+require_metadata(bm, c("singleR_main_label", "CytoTRACE2_Potency", "age", "sex"),
+                 context = "step 4")
+
+neutrophils <- select_cells(bm, list(
+  "singleR_main_label is Neutrophils"  = bm$singleR_main_label == "Neutrophils",
+  "CytoTRACE2_Potency is Differentiated" = bm$CytoTRACE2_Potency == "Differentiated",
+  "age is one of analysis.age_levels"  = bm$age %in% age_levels
+), context = "differentiated neutrophils")
+
 print(table(neutrophils$sex, neutrophils$age))
 
 neutrophils <- join_layers(neutrophils)

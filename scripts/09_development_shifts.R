@@ -38,6 +38,7 @@ load_modules()
 
 age_levels <- cfg$analysis$age_levels
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
+require_metadata(gmp_neu, c("fine_neu_labels", "age", "sex"), context = "step 9")
 
 # ===========================================================================
 # A. Stage composition

@@ -27,6 +27,7 @@ load_modules()
 age_levels <- cfg$analysis$age_levels
 sexes <- cfg$analysis$sex_levels
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
+require_metadata(gmp_neu, c("fine_neu_labels", "age", "sex"), context = "step 6")
 
 # --- pseudobulk overview ---------------------------------------------------
 save_figure(plot_pseudobulk_pca_grid(gmp_neu, cfg), cfg,
@@ -38,6 +39,7 @@ stage_subset <- function(obj, stage, sex) {
   keep <- as.character(obj$fine_neu_labels) == stage &
     obj$sex == sex &
     obj$age %in% age_levels
+  keep <- !is.na(keep) & keep
   cells <- colnames(obj)[keep]
   if (length(cells) < 30) return(NULL)
 

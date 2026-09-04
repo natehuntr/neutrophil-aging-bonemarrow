@@ -36,9 +36,10 @@ for (key in sample_keys) {
   save_object(obj, cfg, paste0(key, "_annotated.rds"))
 
   # --- stem cells + neutrophils ------------------------------------------
-  keep <- grepl(cfg$annotation$neustem_label_pattern, obj$singleR_fine_label)
-  neustem <- subset(obj, cells = colnames(obj)[keep])
-  log_step(sprintf("stem/neutrophil subset: %d of %d cells", ncol(neustem), ncol(obj)))
+  neustem <- select_cells(obj, list(
+    "singleR_fine_label matches annotation.neustem_label_pattern" =
+      grepl(cfg$annotation$neustem_label_pattern, obj$singleR_fine_label)
+  ), context = "stem cells and neutrophils")
 
   neustem <- run_rna_reduction(neustem, dims$neustem_rna_pca)
   neustem <- run_adt_reduction(neustem, dims$neustem_adt_pca)

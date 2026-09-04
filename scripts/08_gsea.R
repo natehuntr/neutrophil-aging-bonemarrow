@@ -38,13 +38,15 @@ args <- commandArgs(trailingOnly = TRUE)
 stages <- if (length(args)) args else cfg$gsea$stages
 
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
+require_metadata(gmp_neu, c("fine_neu_labels", "age", "sex"), context = "step 8")
 
 for (stage in stages) {
   log_step("=================== ", stage, " ===================")
 
-  keep <- as.character(gmp_neu$fine_neu_labels) == stage & gmp_neu$age %in% age_levels
-  keep[is.na(keep)] <- FALSE
-  neus <- subset(gmp_neu, cells = colnames(gmp_neu)[keep])
+  neus <- select_cells(gmp_neu, list(
+    "fine_neu_labels is this stage"     = as.character(gmp_neu$fine_neu_labels) == stage,
+    "age is one of analysis.age_levels" = gmp_neu$age %in% age_levels
+  ), context = paste(stage, "neutrophils"))
 
   group_sizes <- table(neus$sex, neus$age)
   print(group_sizes)

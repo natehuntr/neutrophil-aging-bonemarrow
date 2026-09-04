@@ -129,23 +129,22 @@ add_doublet_calls <- function(obj) {
 #' dropped here along with the QC failures.
 filter_cells <- function(obj, cfg, hashtags) {
   qc <- cfg$qc
-  keep <- !is.na(obj$age) &
-    obj$MULTI_ID %in% hashtags &
-    obj$scDblFinder.class == "singlet" &
-    obj$log10GenesPerUMI > qc$min_log10_genes_per_umi &
-    obj$mitoRatio < qc$max_mito_ratio &
-    obj$percent.hb < qc$max_percent_hb
-
-  # A cell with a single UMI gives log10GenesPerUMI = Inf/NaN, which would
-  # make `keep` NA and break the subset. Treat any non-TRUE as a failure.
-  n_undecided <- sum(is.na(keep))
-  if (n_undecided)
-    log_step(sprintf("  %d cells had a non-finite QC metric and were dropped",
-                     n_undecided))
-  keep <- !is.na(keep) & keep
+  require_metadata(obj, c("age", "MULTI_ID", "scDblFinder.class",
+                          "log10GenesPerUMI", "mitoRatio", "percent.hb"),
+                   context = "QC filtering")
 
   n_before <- ncol(obj)
-  obj <- subset(obj, cells = colnames(obj)[keep])
+  # NA counts as a failure inside select_cells(), which also covers the cell
+  # with a single UMI whose log10GenesPerUMI is Inf/NaN.
+  obj <- select_cells(obj, list(
+    "hashtag call is a real sample" = obj$MULTI_ID %in% hashtags,
+    "age was assigned"              = !is.na(obj$age),
+    "singlet"                       = obj$scDblFinder.class == "singlet",
+    "log10GenesPerUMI above cutoff" = obj$log10GenesPerUMI > qc$min_log10_genes_per_umi,
+    "mitoRatio below cutoff"        = obj$mitoRatio < qc$max_mito_ratio,
+    "percent.hb below cutoff"       = obj$percent.hb < qc$max_percent_hb
+  ), context = "QC filtering")
+
   log_step(sprintf("cell filtering: %d -> %d cells retained (%.1f%% kept)",
                    n_before, ncol(obj), ncol(obj) / n_before * 100))
   obj
