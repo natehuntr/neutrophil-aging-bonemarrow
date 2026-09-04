@@ -45,7 +45,7 @@ keep <- !is.na(gmp_neu$CytoTRACE2_Potency) &
   gmp_neu$CytoTRACE2_Potency == "Differentiated" &
   gmp_neu$age %in% age_levels
 neus <- subset(gmp_neu, cells = colnames(gmp_neu)[keep])
-neus <- Seurat::JoinLayers(neus)
+neus <- join_layers(neus)
 Seurat::DefaultAssay(neus) <- "RNA"
 
 meta <- neus@meta.data[, c("age", "sex")]

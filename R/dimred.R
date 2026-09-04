@@ -17,23 +17,74 @@ safe_npcs <- function(n_cells, n_features, requested = 50) {
 
 #' Dimensions available from a reduction, capped at what was asked for.
 safe_dims <- function(obj, reduction, requested) {
-  available <- ncol(Seurat::Embeddings(obj, reduction = reduction))
+  available <- reduction_ncol(obj, reduction)
   if (requested > available)
     log_step(sprintf("  %s has %d dimensions; using those instead of %d",
                      reduction, available, requested))
   seq_len(min(requested, available))
 }
 
-#' Join the split layers every v5 assay gets after a merge.
+#' Resolve a function that may live in Seurat or in SeuratObject.
+#'
+#' Seurat re-exports much of SeuratObject's API, but not consistently across
+#' v5 releases, so a hard-coded `Seurat::thing` fails on some perfectly good
+#' installations with "not an exported object from 'namespace:Seurat'".
+#' Looking in both namespaces makes the call work either way.
+#'
+#' @return the function, or NULL when neither package exports it.
+seurat_fn <- function(name) {
+  for (pkg in c("Seurat", "SeuratObject")) {
+    if (requireNamespace(pkg, quietly = TRUE) &&
+        name %in% getNamespaceExports(pkg))
+      return(get(name, envir = asNamespace(pkg)))
+  }
+  NULL
+}
+
+#' Assay names, without depending on which namespace exports Assays().
+assay_names <- function(obj) {
+  fn <- seurat_fn("Assays")
+  if (is.null(fn)) names(obj@assays) else fn(obj)
+}
+
+#' Number of dimensions a reduction holds.
+reduction_ncol <- function(obj, reduction) {
+  fn <- seurat_fn("Embeddings")
+  if (is.null(fn)) ncol(obj@reductions[[reduction]]@cell.embeddings)
+  else ncol(fn(obj, reduction = reduction))
+}
+
+#' Join the split layers a v5 assay gets after a merge.
+#'
+#' A no-op on Seurat v4 and on assays that are not split, so it is safe to
+#' call unconditionally.
+join_layers <- function(obj, assay = NULL) {
+  fn <- seurat_fn("JoinLayers")
+  if (is.null(fn)) return(obj)   # Seurat v4: no layers exist
+
+  if (!is.null(assay)) {
+    original <- Seurat::DefaultAssay(obj)
+    Seurat::DefaultAssay(obj) <- assay
+    obj <- fn(obj)
+    Seurat::DefaultAssay(obj) <- original
+    return(obj)
+  }
+  fn(obj)
+}
+
+#' Join the split layers of every v5 assay.
 #'
 #' JoinLayers() only touches one assay, and ScaleData on an assay still split
 #' into counts.1/counts.2 does not do what it looks like it does.
 join_all_layers <- function(obj) {
+  # NULL under Seurat v4, which has no layers and so nothing to join.
+  if (is.null(seurat_fn("JoinLayers"))) return(obj)
+
   original <- Seurat::DefaultAssay(obj)
-  for (assay in Seurat::Assays(obj)) {
+  for (assay in assay_names(obj)) {
     if (!inherits(obj[[assay]], "Assay5")) next
     Seurat::DefaultAssay(obj) <- assay
-    obj <- Seurat::JoinLayers(obj)
+    obj <- join_layers(obj)
   }
   Seurat::DefaultAssay(obj) <- original
   obj

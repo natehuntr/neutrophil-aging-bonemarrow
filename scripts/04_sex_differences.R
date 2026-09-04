@@ -32,7 +32,7 @@ neutrophils <- subset(bm, cells = colnames(bm)[keep])
 log_step(sprintf("differentiated neutrophils: %d cells", ncol(neutrophils)))
 print(table(neutrophils$sex, neutrophils$age))
 
-neutrophils <- Seurat::JoinLayers(neutrophils)
+neutrophils <- join_layers(neutrophils)
 Seurat::DefaultAssay(neutrophils) <- "RNA"
 neutrophils <- Seurat::NormalizeData(neutrophils, verbose = FALSE)
 Seurat::Idents(neutrophils) <- neutrophils$age_sex

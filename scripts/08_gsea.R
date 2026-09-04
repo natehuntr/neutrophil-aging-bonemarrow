@@ -53,7 +53,7 @@ for (stage in stages) {
     next
   }
 
-  neus <- Seurat::JoinLayers(neus)
+  neus <- join_layers(neus)
   Seurat::DefaultAssay(neus) <- "RNA"
   neus <- Seurat::NormalizeData(neus, verbose = FALSE)
 

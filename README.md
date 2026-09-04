@@ -126,6 +126,13 @@ makes this *worse*, not better: every worker gets its own copy of those same
 large globals. `sequential`, the default, is usually both faster and lighter
 here.
 
+**`'X' is not an exported object from 'namespace:Seurat'`**, e.g. for
+`JoinLayers`. Those functions are defined in **SeuratObject**, and which of
+them Seurat re-exports varies between v5 releases. `seurat_fn()` in
+`R/dimred.R` looks in both namespaces; use it (or `join_layers()` /
+`assay_names()`, which are built on it) rather than hard-coding
+`Seurat::thing` for anything that originates in SeuratObject.
+
 **`FindClusters` fails on `algorithm = 4`.** That is Leiden, which needs the
 Python `leidenalg` package through reticulate. Set `clustering.algorithm: 1`
 in the config for Louvain, which needs nothing extra.

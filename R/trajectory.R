@@ -10,7 +10,7 @@
 
 #' Convert a Seurat object to a monocle3 cell_data_set and preprocess it.
 to_cds <- function(obj, assay = "RNA", num_dim = 50) {
-  obj <- Seurat::JoinLayers(obj)
+  obj <- join_layers(obj)
   cds <- SeuratWrappers::as.cell_data_set(obj, assay = assay)
   cds <- monocle3::preprocess_cds(cds, num_dim = num_dim)
   monocle3::cluster_cells(cds)
