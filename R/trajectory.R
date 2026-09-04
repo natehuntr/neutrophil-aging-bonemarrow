@@ -98,7 +98,7 @@ trajectory_by_group <- function(obj, cfg, group_cells, prefix,
                                 use_partition = FALSE,
                                 ncenter = 300,
                                 minimal_branch_len = 10,
-                                cores = 4) {
+                                cores = cfg$compute$cores %||% 4) {
   results <- list()
   for (nm in names(group_cells)) {
     log_step("trajectory: ", prefix, " ", nm)

@@ -113,6 +113,19 @@ generic it needs. `require_packages()` attaches rather than merely checking,
 and each step declares the packages it needs at the top of the script. If a
 new step hits this, add the package to that step's `require_packages()` call.
 
+**`The total size of the N globals exported for future expression is ... MiB.
+This exceeds the maximum allowed size 500.00 MiB`**, usually from
+`run_sct_reduction`. Seurat routes SCTransform through the `future` package,
+whose default ceiling on data captured by a closure is 500 MiB; SCTransform's
+`conserve.memory` path captures the count matrix and exceeds it on a full
+sample. Raise `compute.globals_max_size_gb` in the config (default 8). It is a
+transfer ceiling, not an allocation — raising it reserves no memory.
+
+If the machine is short on RAM, note that a parallel `compute.future_plan`
+makes this *worse*, not better: every worker gets its own copy of those same
+large globals. `sequential`, the default, is usually both faster and lighter
+here.
+
 **`FindClusters` fails on `algorithm = 4`.** That is Leiden, which needs the
 Python `leidenalg` package through reticulate. Set `clustering.algorithm: 1`
 in the config for Louvain, which needs nothing extra.

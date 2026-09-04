@@ -51,8 +51,33 @@ init_project <- function(quiet = FALSE) {
   cfg <- load_config()
   ensure_output_dirs(cfg)
   set.seed(cfg$seed)
+  configure_compute(cfg, quiet = quiet)
   if (!quiet) log_step("project root: ", PROJECT_ROOT)
   cfg
+}
+
+#' Apply the compute settings from the config.
+#'
+#' Seurat dispatches SCTransform and friends through `future`, which caps how
+#' much captured data it will hand to an evaluation at 500 MiB by default.
+#' SCTransform's conserve.memory path captures the count matrix in its closure
+#' and blows past that on a full sample, so the cap is raised here, once, for
+#' every script. The cap is a transfer ceiling rather than an allocation:
+#' raising it reserves nothing.
+configure_compute <- function(cfg, quiet = FALSE) {
+  compute <- cfg$compute %||% list()
+  max_size_gb <- compute$globals_max_size_gb %||% 8
+
+  options(future.globals.maxSize = max_size_gb * 1024^3)
+  if (!quiet) log_step(sprintf("future.globals.maxSize = %g GiB", max_size_gb))
+
+  plan_name <- compute$future_plan %||% "sequential"
+  if (requireNamespace("future", quietly = TRUE)) {
+    future::plan(plan_name)
+  } else if (!identical(plan_name, "sequential")) {
+    warning("future is not installed; compute.future_plan is ignored")
+  }
+  invisible(cfg)
 }
 
 #' Source every analysis module. Kept separate from init_project() so that

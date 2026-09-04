@@ -11,6 +11,31 @@
 project: neutrophil-aging-bonemarrow
 seed: 42
 
+# ---------------------------------------------------------------------------
+# Compute
+#
+# Seurat farms SCTransform and several other steps out through the `future`
+# package, which refuses to hand a worker more than `globals_max_size_gb` of
+# captured data. SCTransform's conserve.memory path captures the count matrix
+# inside its closure, so on a full bone marrow sample it trips future's 500 MiB
+# default and the run dies with:
+#
+#   The total size of the N globals exported for future expression ('FUN()')
+#   is ... MiB. This exceeds the maximum allowed size 500.00 MiB
+#
+# This is a transfer ceiling, not an allocation: raising it does not reserve
+# memory, it just stops future from refusing. Raise it further if a bigger
+# sample trips it again.
+compute:
+  globals_max_size_gb: 8
+  # "sequential" runs in this process. Parallel plans copy those same large
+  # globals into every worker, so multisession on a laptop is usually slower
+  # and much heavier; change this only with the memory headroom to match.
+  future_plan: sequential
+  # Workers for monocle3's graph_test(), which parallelises independently of
+  # future.
+  cores: 4
+
 paths:
   cellranger_root: data/per_sample_outs
   raw_matrix_dir: sample_raw_feature_bc_matrix

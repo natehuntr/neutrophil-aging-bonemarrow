@@ -81,6 +81,21 @@ cells in **every** age group, and `age_changing()` warns when the median
 `|log2FC|` of its own hits exceeds 2, which is what a sparsity-driven result
 looks like. If that warning fires, raise `permutation_de.min_cells`.
 
+## Runtime and memory
+
+The pipeline runs sequentially by default (`compute.future_plan`). This is
+deliberate: the steps that would parallelise are the ones capturing a large
+count matrix in a closure, so each worker receives its own copy and a parallel
+plan multiplies peak memory without much time saved. Set a parallel plan only
+with the RAM to match.
+
+`compute.globals_max_size_gb` raises the ceiling `future` places on that
+captured data. It is a ceiling, not a reservation.
+
+Step 7 is the slow one — it refits every model `glm_de.n_perm` times to build
+the permutation null. Lower that for a first pass, then raise it once the rest
+of the pipeline is known to work end to end.
+
 ## Stage labels
 
 `analysis.neutrophil_cluster_labels` maps cluster ids to maturation stages.
