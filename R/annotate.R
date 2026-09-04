@@ -68,6 +68,11 @@ CYTOTRACE_COLUMNS <- c("CytoTRACE2_Score", "CytoTRACE2_Potency",
                        "CytoTRACE2_Relative", "preKNN_CytoTRACE2_Score",
                        "preKNN_CytoTRACE2_Potency")
 
+#' The potency labels CytoTRACE2 assigns, least to most potent. Used to check
+#' that the column still holds labels rather than factor codes.
+CYTOTRACE_POTENCY_LEVELS <- c("Differentiated", "Unipotent", "Oligopotent",
+                              "Multipotent", "Pluripotent", "Totipotent")
+
 #' Developmental potency per cell (CytoTRACE2).
 #'
 #' The result is verified rather than trusted: if CytoTRACE2 returns columns

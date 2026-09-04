@@ -169,3 +169,39 @@ original avoided only by being run by hand, one chunk at a time.
 - **`glm_group_means()` assumed exactly three ages.** It indexed `Beta[, 2]`
   and `Beta[, 3]` directly; it now derives the means from however many levels
   the design has, and errors if the design is not `~ age`.
+
+## Found on the first real data run
+
+The pipeline had never been executed against the actual matrices when it was
+written. Five failures surfaced on the first end-to-end run; four were
+packaging rather than analysis, the fifth was a genuine data-corrupting bug.
+
+- **`could not find function "assay<-"`** (step 1). S4 generics resolve through
+  the search path, so `Pkg::fun()` is not enough when a generic is looked up
+  inside another package's method. `require_packages()` now attaches.
+
+- **`future` globals ceiling** (step 2). Seurat routes SCTransform through
+  `future`, whose default limit on data captured by a closure is 500 MiB;
+  SCTransform's `conserve.memory` path captures the count matrix and needs
+  ~513 MiB. Configurable via `compute.globals_max_size_gb`.
+
+- **`'JoinLayers' is not an exported object`** (step 3). It lives in
+  SeuratObject, and which of its functions Seurat re-exports varies by release.
+  `seurat_fn()` resolves from either namespace.
+
+- **A factor became its integer codes** (step 3, surfacing in step 4). This one
+  silently corrupted data rather than erroring. `transfer_metadata()` copied
+  columns from the stem/neutrophil subset onto the merged object by assigning
+  into a pre-allocated `rep(NA, n)` vector. Assigning a factor into a bare
+  vector stores its **level codes**, so `CytoTRACE2_Potency` arrived as
+  1/2/3/4 instead of Differentiated/Unipotent/Oligopotent/Multipotent. Nothing
+  errored; `== "Differentiated"` simply matched nothing, and step 4 reported
+  "No cells found" — blaming the data for a transfer bug three steps upstream.
+  The fix is to index the source vector (`column[idx]`), which preserves class.
+  Step 3 now also asserts the column still holds potency labels.
+
+- **A missing column emptied filters silently.** `obj$absent == "x"` is
+  `logical(0)`, and `TRUE & logical(0)` is `logical(0)`, so one absent column
+  collapses an entire multi-condition filter without error. `select_cells()`
+  now reports a per-condition breakdown and treats a zero-length condition as
+  its own error.

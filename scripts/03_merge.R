@@ -30,28 +30,34 @@ neustem   <- lapply(stats::setNames(sample_keys, sample_keys),
 # --- carry the potency calls back onto the full objects --------------------
 #' Copy columns from a subset back onto the full object, by cell name.
 #'
-#' Cells absent from the subset get NA. A requested column that the subset does
-#' not have is reported rather than silently skipped: downstream steps select
-#' on CytoTRACE2_Potency, and if it never arrives they fail with an empty
-#' subset three steps from here.
+#' Cells absent from the subset get NA. A requested column the subset does not
+#' have is reported rather than silently skipped: downstream steps select on
+#' CytoTRACE2_Potency, and if it never arrives they fail with an empty subset
+#' several steps from here.
+#'
+#' The values are taken as `source_column[idx]` rather than assigned into a
+#' pre-allocated NA vector. That is not a style preference. Assigning a factor
+#' into a bare `rep(NA, n)` vector stores the factor's INTEGER LEVEL CODES, so
+#' CytoTRACE2_Potency arrived as 1/2/3/4 instead of
+#' Differentiated/Unipotent/..., every downstream `== "Differentiated"` matched
+#' nothing, and step 4 died with "No cells found". Indexing the source vector
+#' preserves its class, factors included.
 transfer_metadata <- function(target, source, columns, label = "") {
   absent <- setdiff(columns, colnames(source@meta.data))
   if (length(absent))
     warning(label, ": column(s) not present on the subset and so not ",
             "transferred: ", paste(absent, collapse = ", "))
 
-  idx <- match(colnames(source), colnames(target))
-  matched <- !is.na(idx)
-  if (!any(matched))
+  # For each target cell, the row of `source` it corresponds to (NA if absent).
+  idx <- match(colnames(target), colnames(source))
+  if (!any(!is.na(idx)))
     stop(label, ": no cell names in common between the subset and the full ",
          "object, so nothing can be transferred. Were they built from ",
          "different runs of step 2?")
 
-  for (col in intersect(columns, colnames(source@meta.data))) {
-    values <- rep(NA, ncol(target))
-    values[idx[matched]] <- source@meta.data[[col]][matched]
-    target[[col]] <- values
-  }
+  for (col in intersect(columns, colnames(source@meta.data)))
+    target[[col]] <- source@meta.data[[col]][idx]
+
   target
 }
 
@@ -71,6 +77,17 @@ for (key in sample_keys) {
     stop(key, ": no cell has a CytoTRACE2_Potency value after the transfer.\n",
          "Steps 4 and 7 select on it, so they would fail with an empty subset.\n",
          "Re-run step 2 for this sample and check the CytoTRACE2 output.")
+
+  # Guard against a silent type change during the transfer: a factor copied
+  # into a bare vector becomes its integer level codes, which compares equal to
+  # nothing and empties every downstream filter without erroring.
+  observed <- unique(as.character(stats::na.omit(
+    annotated[[key]]$CytoTRACE2_Potency)))
+  if (!any(observed %in% CYTOTRACE_POTENCY_LEVELS))
+    stop(key, ": CytoTRACE2_Potency holds [", paste(observed, collapse = ", "),
+         "] after the transfer, none of which are potency labels.\n",
+         "Expected some of: ", paste(CYTOTRACE_POTENCY_LEVELS, collapse = ", "),
+         "\nValues like 1/2/3/4 mean a factor lost its levels in transit.")
 }
 
 # --- all cells, both sexes -------------------------------------------------
