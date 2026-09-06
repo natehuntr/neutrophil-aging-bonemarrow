@@ -105,7 +105,10 @@ commented out so it submits against your site defaults; uncomment whichever
 your cluster requires. `R_MODULE` (default `R`) is loaded if the cluster uses
 environment modules, and skipped if not.
 
-`submit_all.sh` gives each step its own allocation and chains them with
+`submit_all.sh` is run **directly**, not with `sbatch` — it is the thing that
+calls `sbatch`. Only `run_pipeline.sbatch` is submitted.
+
+It gives each step its own allocation and chains them with
 `afterok`, so the dependency graph runs as it should:
 
 ```
@@ -203,6 +206,11 @@ model matrix and the fit dies in a `tibble()` call several frames down. Step 5
 now filters counts, pseudotime, weights and conditions to one common set of
 cells and asserts they agree before calling `fitGAM`. Cells at a timepoint
 outside `analysis.age_levels` are the usual source: they become NA conditions.
+
+**`no config/config.yml next to /tmp/slurmd/job...`**. `submit_all.sh` was
+submitted with `sbatch`. It is a submitter, not a job: run it directly
+(`./slurm/submit_all.sh 7 8 9`). Only `run_pipeline.sbatch` goes through
+`sbatch`.
 
 **`FindClusters` fails on `algorithm = 4`.** That is Leiden, which needs the
 Python `leidenalg` package through reticulate. Set `clustering.algorithm: 1`

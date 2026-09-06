@@ -23,8 +23,28 @@
 
 set -euo pipefail
 
-# This script is run directly, so $0 does point at the real file (unlike inside
-# a SLURM job, where the script is a spool copy).
+# This is a SUBMITTER, not a job. It calls sbatch itself, so it must be run
+# directly on a login node. Submitting it with sbatch puts it on a compute node
+# where $0 is a spool copy, the project cannot be located, and an allocation is
+# held open doing nothing but issuing three sbatch calls.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  cat >&2 <<MSG
+ERROR: submit_all.sh is running inside a SLURM job (job $SLURM_JOB_ID).
+
+It is a submitter, not a batch script -- it calls sbatch for you, so it belongs
+on the login node:
+
+  ./slurm/submit_all.sh $*
+
+To run steps as a single job instead, submit the batch script:
+
+  sbatch --export=ALL,STEPS="${*:-7 8 9}" slurm/run_pipeline.sbatch
+MSG
+  exit 1
+fi
+
+# Run directly, $0 points at the real file (inside a job it would be a copy in
+# the spool directory).
 cd "$(dirname "$0")/.."
 if [[ ! -f config/config.yml ]]; then
   echo "ERROR: no config/config.yml next to $(dirname "$0")" >&2
