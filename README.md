@@ -89,8 +89,16 @@ sbatch --export=ALL,STEPS="6 8 9" slurm/run_pipeline.sbatch
 DRY_RUN=1 ./slurm/submit_all.sh                      # show what would be submitted
 ```
 
-Submit from the project root — the job checks for `config/config.yml` and
-refuses to start otherwise. Output lands in `logs/<jobname>-<jobid>.out`.
+Submit from anywhere inside the project: the job walks up from the submit
+directory looking for `config/config.yml`, so `slurm/` and `scripts/` work as
+well as the root. From outside the project, pass the path explicitly:
+
+```bash
+sbatch --export=ALL,PROJECT_DIR=/path/to/project slurm/run_pipeline.sbatch
+```
+
+`submit_all.sh` sets `PROJECT_DIR` for you, so it works from any directory.
+Output lands in `<project>/logs/<jobname>-<jobid>.out` and `.err`.
 
 `slurm/run_pipeline.sbatch` leaves `--partition`, `--account` and `--qos`
 commented out so it submits against your site defaults; uncomment whichever

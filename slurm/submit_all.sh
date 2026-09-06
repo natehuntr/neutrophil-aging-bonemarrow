@@ -23,9 +23,19 @@
 
 set -euo pipefail
 
+# This script is run directly, so $0 does point at the real file (unlike inside
+# a SLURM job, where the script is a spool copy).
 cd "$(dirname "$0")/.."
-[[ -f config/config.yml ]] || { echo "run this from the project root" >&2; exit 1; }
+if [[ ! -f config/config.yml ]]; then
+  echo "ERROR: no config/config.yml next to $(dirname "$0")" >&2
+  echo "Keep submit_all.sh in the project's slurm/ directory." >&2
+  exit 1
+fi
 mkdir -p logs
+
+# Jobs inherit this, so they land on the project regardless of where sbatch
+# was invoked from.
+export PROJECT_DIR="$PWD"
 
 SBATCH_SCRIPT=slurm/run_pipeline.sbatch
 REQUESTED=("$@")
@@ -81,7 +91,7 @@ for step in 1 2 3 4 5 6 7 8 9; do
 
   # shellcheck disable=SC2046
   cmd=(sbatch --parsable --job-name="bm-step${step}" $(resources_for "$step")
-       ${dep_args:+$dep_args} --export=ALL,STEPS="$step" "$SBATCH_SCRIPT")
+       ${dep_args:+$dep_args} --export=ALL,STEPS="$step",PROJECT_DIR="$PROJECT_DIR" "$SBATCH_SCRIPT")
 
   if [[ -n "${DRY_RUN:-}" ]]; then
     printf '%s\n' "${cmd[*]}"

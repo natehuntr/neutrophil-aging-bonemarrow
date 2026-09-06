@@ -44,12 +44,34 @@ R_MODULE="${R_MODULE:-R}"
 
 set -euo pipefail
 
-cd "${SLURM_SUBMIT_DIR:-$PWD}"
-if [[ ! -f config/config.yml ]]; then
-  echo "ERROR: no config/config.yml in $PWD" >&2
-  echo "Submit from the project root: sbatch slurm/run_pipeline.sbatch" >&2
+# Find the project root: PROJECT_DIR if given, otherwise walk up from wherever
+# the job was submitted. Walking up means submitting from slurm/ or scripts/
+# works as well as from the root. $0 is no help here -- SLURM runs a copy of
+# this script from a spool directory, so it says nothing about where the
+# project is.
+find_project_root() {
+  local dir
+  dir="$(cd "${1:-.}" 2>/dev/null && pwd)" || return 1
+  while [[ "$dir" != "/" ]]; do
+    [[ -f "$dir/config/config.yml" ]] && { printf '%s\n' "$dir"; return 0; }
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+START_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
+if ! PROJECT_ROOT="$(find_project_root "$START_DIR")"; then
+  echo "ERROR: no config/config.yml in $START_DIR or any directory above it." >&2
+  echo "" >&2
+  echo "Submit from inside the project, or name it explicitly:" >&2
+  echo "  cd /path/to/the/project && sbatch slurm/run_pipeline.sbatch" >&2
+  echo "  sbatch --export=ALL,PROJECT_DIR=/path/to/the/project slurm/run_pipeline.sbatch" >&2
+  echo "" >&2
+  echo "To locate it:" >&2
+  echo "  find \"$START_DIR\" -maxdepth 3 -path '*/config/config.yml'" >&2
   exit 1
 fi
+cd "$PROJECT_ROOT"
 mkdir -p logs
 
 if [[ -n "$R_MODULE" ]] && command -v module &>/dev/null; then
@@ -76,7 +98,7 @@ STEPS="${STEPS:-}"
 
 echo "=========================================================="
 echo "job          : ${SLURM_JOB_ID:-<interactive>} on $(hostname)"
-echo "directory    : $PWD"
+echo "project root : $PWD"
 echo "steps        : ${STEPS:-all (1-9)}"
 echo "cpus / mem   : $CPUS / ${SLURM_MEM_PER_NODE:-?} MB"
 echo "R            : $(command -v Rscript) ($(Rscript -e 'cat(R.version.string)'))"
