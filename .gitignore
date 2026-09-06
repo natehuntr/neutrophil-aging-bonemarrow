@@ -6,6 +6,10 @@ results/tables/*
 results/figures/*
 !results/**/.gitkeep
 
+# SLURM job output
+logs/*
+!logs/.gitkeep
+
 # R
 .Rproj.user/
 .Rhistory

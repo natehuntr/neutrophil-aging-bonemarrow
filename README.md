@@ -80,6 +80,47 @@ around, so it is worth running even when the expression steps are not.
 Step 7 is by far the slowest: it refits every model `glm_de.n_perm` times to
 build the permutation null. Lower that value in the config for a quick pass.
 
+## Running on a cluster (SLURM)
+
+```bash
+sbatch slurm/run_pipeline.sbatch                     # all steps, one job
+sbatch --export=ALL,STEPS="6 8 9" slurm/run_pipeline.sbatch
+./slurm/submit_all.sh                                # one job per step, chained
+DRY_RUN=1 ./slurm/submit_all.sh                      # show what would be submitted
+```
+
+Submit from the project root — the job checks for `config/config.yml` and
+refuses to start otherwise. Output lands in `logs/<jobname>-<jobid>.out`.
+
+`slurm/run_pipeline.sbatch` leaves `--partition`, `--account` and `--qos`
+commented out so it submits against your site defaults; uncomment whichever
+your cluster requires. `R_MODULE` (default `R`) is loaded if the cluster uses
+environment modules, and skipped if not.
+
+`submit_all.sh` gives each step its own allocation and chains them with
+`afterok`, so the dependency graph runs as it should:
+
+```
+1 -> 2 -> 3 -+-> 4
+             +-> 6
+             +-> 8
+             +-> 5 -+-> 7
+                    +-> 9
+```
+
+Steps 4, 6 and 8 run in parallel once 3 finishes; 7 and 9 once 5 does. A
+failure stops its own branch rather than feeding a later step a half-written
+object.
+
+The per-step time and memory requests in `submit_all.sh` are starting points,
+not measurements. Run `seff <jobid>` after the first successful pass and
+tighten them. Step 7 is the outlier: it refits every model
+`glm_de.n_perm` times, so lower that value for a first pass.
+
+Keep `--cpus-per-task` at or above `compute.cores` in the config — the job
+warns if it is not. BLAS threading is pinned to one thread per process so R's
+linear algebra does not grab the whole node and fight the allocation.
+
 ## Configuration
 
 Everything tunable lives in `config/config.yml`: input paths, sample IDs and
