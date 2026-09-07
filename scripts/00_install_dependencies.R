@@ -9,6 +9,21 @@
 # package.
 # ---------------------------------------------------------------------------
 
+# Compile in parallel where the allocation allows it. detectCores() would
+# report the whole node rather than this job's share.
+NCPUS <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = "1"))
+options(Ncpus = max(1L, NCPUS))
+
+# Install into the first writable library, creating it if the site config
+# named one that does not exist yet.
+lib <- Sys.getenv("R_LIBS_USER")
+if (nzchar(lib)) {
+  dir.create(lib, recursive = TRUE, showWarnings = FALSE)
+  .libPaths(c(lib, .libPaths()))
+}
+cat("installing into:", .libPaths()[1], "\n")
+cat("parallel jobs  :", getOption("Ncpus"), "\n\n")
+
 cran <- c(
   "yaml", "here", "dplyr", "tidyr", "tibble", "purrr", "readr", "glue",
   "ggplot2", "patchwork", "pheatmap", "matrixStats", "Matrix", "scales",

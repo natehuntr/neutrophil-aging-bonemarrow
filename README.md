@@ -104,7 +104,27 @@ Output lands in `<project>/logs/<jobname>-<jobid>.out` and `.err`.
 commented out so it submits against your site defaults; uncomment whichever
 your cluster requires.
 
-**Getting R.** By default the job loads nothing and uses whatever `Rscript` is
+**Getting R.** `slurm/env.sh` names the R module and package library once, and
+is sourced by the jobs, the submitter and the dependency installer, so they
+cannot drift apart. Edit its two lines for your site:
+
+```bash
+R_MODULE="${R_MODULE:-R/4.3.2-gfbf-2023a}"
+R_LIBS_USER="${R_LIBS_USER:-/path/on/shared/storage/R/library-R-4.3.2}"
+```
+
+Then install the packages once:
+
+```bash
+sbatch slurm/install_dependencies.sbatch
+```
+
+That job installs into the library named above and finishes by checking the
+pipeline can load what it needs, so a green exit means the environment is
+genuinely ready. Anything already set in the environment overrides `env.sh`,
+so a one-off is still `R_MODULE=R/4.4.0-gfbf-2023b ./slurm/submit_all.sh 7`.
+
+Without `env.sh`, the job loads nothing and uses whatever `Rscript` is
 on `PATH`. Jobs are submitted with `--export=ALL`, so a conda environment
 activated before `sbatch` carries through on its own:
 

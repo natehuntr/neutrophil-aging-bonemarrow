@@ -86,6 +86,11 @@ fi
 cd "$PROJECT_ROOT"
 mkdir -p logs
 
+if [[ -f slurm/env.sh ]]; then
+  # shellcheck disable=SC1091
+  source slurm/env.sh
+fi
+
 if [[ -n "$R_MODULE" && -n "$CONDA_ENV" ]]; then
   echo "ERROR: set R_MODULE or CONDA_ENV, not both." >&2
   echo "Loading a module on top of a conda environment gives you the module's" >&2

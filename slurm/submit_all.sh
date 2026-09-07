@@ -57,6 +57,12 @@ mkdir -p logs
 # was invoked from.
 export PROJECT_DIR="$PWD"
 
+# Site settings (R module, package library). Sourcing them here means the
+# preflight below tests the same R the jobs will run, not whatever the login
+# shell happens to have.
+# shellcheck disable=SC1091
+[[ -f slurm/env.sh ]] && source slurm/env.sh
+
 SBATCH_SCRIPT=slurm/run_pipeline.sbatch
 REQUESTED=("$@")
 
