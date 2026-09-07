@@ -66,10 +66,25 @@ mkdir -p "$R_LIBS_USER" || {
 }
 export R_LIBS_USER
 
+echo "startup    : R_ENVIRON_USER=${R_ENVIRON_USER:-<default>} R_PROFILE_USER=${R_PROFILE_USER:-<default>}"
 echo "R          : $(command -v Rscript)"
 echo "             $(Rscript -e 'cat(R.version.string)')"
 echo "library    : $R_LIBS_USER"
 echo "cpus       : ${SLURM_CPUS_PER_TASK:-1}"
+echo
+echo "R's library search path (the first entry is where packages will land):"
+Rscript -e 'cat(paste0("  ", .libPaths()), sep = "\n")'
+echo
+# A library built for another R version on this path is the single most common
+# cause of an install that appears to work and then fails to load.
+Rscript -e '
+  bad <- grep(paste0("library/", getRversion()[, 1:2], "$"), .libPaths(),
+              invert = TRUE, value = TRUE)
+  bad <- grep("x86_64-pc-linux-gnu-library/[0-9]+\\.[0-9]+$", bad, value = TRUE)
+  bad <- bad[basename(bad) != paste(getRversion()[, 1:2])]
+  if (length(bad))
+    warning("library paths built for a different R version are on the search ",
+            "path: ", paste(bad, collapse = ", "), call. = FALSE)'
 echo
 
 Rscript scripts/00_install_dependencies.R

@@ -25,3 +25,31 @@ R_MODULE="${R_MODULE:-R/4.3.2-gfbf-2023a}"
 R_LIBS_USER="${R_LIBS_USER:-$HOME/R/library-${R_MODULE//\//-}}"
 
 export R_MODULE R_LIBS_USER
+
+# ---------------------------------------------------------------------------
+# Ignore personal R startup files for pipeline runs.
+#
+# ~/.Renviron, ~/.Rprofile and ~/.R/Makevars are read by every R session and
+# override the environment the job sets up. On a cluster with several R
+# versions that reliably goes wrong:
+#
+#   - an R_LIBS_USER pinned to another R version's library, so packages
+#     install into (and load from) a tree built for a different R. The
+#     symptoms are "This is R 4.3.2, package 'Matrix' needs >= 4.4",
+#     "unable to load shared object .../libs/foo.so", and "failed to lock
+#     directory ... for modifying";
+#   - a Makevars adding a conda prefix to CPPFLAGS/LDFLAGS, so packages
+#     compile against conda headers and link conda libraries while running
+#     under a module R. That is what produces a dyn.load of a conda
+#     libstdc++ from an R that has nothing to do with conda.
+#
+# This affects pipeline runs only; interactive R still reads them normally.
+# Set CLEAN_R_STARTUP= (empty) to opt out.
+CLEAN_R_STARTUP="${CLEAN_R_STARTUP:-1}"
+if [[ -n "$CLEAN_R_STARTUP" ]]; then
+  export R_ENVIRON_USER=/dev/null
+  export R_PROFILE_USER=/dev/null
+  export R_MAKEVARS_USER=/dev/null
+  # R_LIBS would prepend other trees ahead of R_LIBS_USER.
+  unset R_LIBS || true
+fi

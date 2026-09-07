@@ -240,6 +240,15 @@ now filters counts, pseudotime, weights and conditions to one common set of
 cells and asserts they agree before calling `fitGAM`. Cells at a timepoint
 outside `analysis.age_levels` are the usual source: they become NA conditions.
 
+**`This is R 4.3.2, package 'Matrix' needs >= 4.4`**, `failed to lock
+directory .../library/4.4`, `unable to load shared object .../libs/foo.so`, or
+compile flags pointing at a conda prefix. All the same cause: `~/.Renviron`,
+`~/.Rprofile` or `~/.R/Makevars` overriding the environment the job set up,
+usually with a library pinned to a different R version or a conda prefix in
+CPPFLAGS. `slurm/env.sh` sets `CLEAN_R_STARTUP=1` by default, which points
+`R_ENVIRON_USER`, `R_PROFILE_USER` and `R_MAKEVARS_USER` at `/dev/null` for
+pipeline runs and unsets `R_LIBS`. Interactive R still reads them.
+
 **`missing packages: Seurat, Matrix, dplyr, ...`** from a SLURM job. The job
 found an R, but not the one your packages are installed in. `submit_all.sh`
 now checks this before submitting anything and names the R it tested. Activate
