@@ -102,8 +102,21 @@ Output lands in `<project>/logs/<jobname>-<jobid>.out` and `.err`.
 
 `slurm/run_pipeline.sbatch` leaves `--partition`, `--account` and `--qos`
 commented out so it submits against your site defaults; uncomment whichever
-your cluster requires. `R_MODULE` (default `R`) is loaded if the cluster uses
-environment modules, and skipped if not.
+your cluster requires.
+
+**Getting R.** By default the job loads nothing and uses whatever `Rscript` is
+on `PATH`. Jobs are submitted with `--export=ALL`, so a conda environment
+activated before `sbatch` carries through on its own:
+
+```bash
+conda activate giotto_env
+./slurm/submit_all.sh 7 8 9
+```
+
+Set `R_MODULE` for an environment module, or `CONDA_ENV` to have the job
+activate one itself — but never both. A module's R ahead of conda's on `PATH`,
+with conda's libraries still in play, fails at `dyn.load`; the job refuses that
+combination rather than producing it.
 
 `submit_all.sh` is run **directly**, not with `sbatch` — it is the thing that
 calls `sbatch`. Only `run_pipeline.sbatch` is submitted.
@@ -206,6 +219,14 @@ model matrix and the fit dies in a `tibble()` call several frames down. Step 5
 now filters counts, pseudotime, weights and conditions to one common set of
 cells and asserts they agree before calling `fitGAM`. Cells at a timepoint
 outside `analysis.age_levels` are the usual source: they become NA conditions.
+
+**`unable to load shared object '.../conda/envs/<env>/lib/libstdc++.so.6'`**.
+Two R installations are mixed: one R is running while the libraries come from
+another. Usually an environment module loaded on top of an active conda
+environment. Use one or the other — activate conda before `sbatch` and set
+neither `R_MODULE` nor `CONDA_ENV`, or set exactly one. The job header prints
+which `Rscript`, which conda prefix and which `R_LIBS_USER` it ended up with,
+which is normally enough to see the mixture.
 
 **`no config/config.yml next to /tmp/slurmd/job...`**. `submit_all.sh` was
 submitted with `sbatch`. It is a submitter, not a job: run it directly

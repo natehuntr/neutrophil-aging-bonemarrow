@@ -34,9 +34,21 @@
 ##SBATCH --mail-type=END,FAIL
 ##SBATCH --mail-user=you@example.edu
 
-# Name of the R module to load, if your cluster uses environment modules.
-# Set to "" to skip (e.g. R is already on PATH, or you use conda).
-R_MODULE="${R_MODULE:-R}"
+# How to get R. Pick ONE; setting both is what breaks a conda setup, because a
+# module's R ends up first on PATH while the libraries still come from conda.
+#
+#   R_MODULE   name of an environment module to load, e.g. "R/4.3.1"
+#   CONDA_ENV  name or path of a conda environment to activate
+#
+# Both default to empty, in which case whatever R is on PATH at submit time is
+# used. Jobs are submitted with --export=ALL, so a conda environment activated
+# before sbatch carries through on its own and needs nothing set here.
+R_MODULE="${R_MODULE:-}"
+CONDA_ENV="${CONDA_ENV:-}"
+
+# Set to 1 to run `module purge` first. Off by default: it strips compiler and
+# library modules that an R build may depend on.
+MODULE_PURGE="${MODULE_PURGE:-}"
 
 # Optional personal library. Leave unset to use R's default.
 # export R_LIBS_USER="$HOME/R/library"
@@ -74,13 +86,37 @@ fi
 cd "$PROJECT_ROOT"
 mkdir -p logs
 
-if [[ -n "$R_MODULE" ]] && command -v module &>/dev/null; then
-  module purge || true
+if [[ -n "$R_MODULE" && -n "$CONDA_ENV" ]]; then
+  echo "ERROR: set R_MODULE or CONDA_ENV, not both." >&2
+  echo "Loading a module on top of a conda environment gives you the module's" >&2
+  echo "R running against conda's libraries, which fails at dyn.load." >&2
+  exit 1
+fi
+
+if [[ -n "$R_MODULE" ]]; then
+  command -v module &>/dev/null || { echo "ERROR: R_MODULE is set but this node has no 'module' command." >&2; exit 1; }
+  [[ -n "$MODULE_PURGE" ]] && { module purge || true; }
   module load "$R_MODULE"
 fi
 
+if [[ -n "$CONDA_ENV" ]]; then
+  # `conda activate` needs the shell hook; it is not available in a
+  # non-interactive shell by default.
+  CONDA_BASE="$(conda info --base 2>/dev/null || true)"
+  if [[ -z "$CONDA_BASE" || ! -f "$CONDA_BASE/etc/profile.d/conda.sh" ]]; then
+    echo "ERROR: CONDA_ENV is set but conda was not found on this node." >&2
+    echo "Either load your conda module first, or activate the environment" >&2
+    echo "before sbatch and leave CONDA_ENV unset -- --export=ALL carries it." >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1091
+  source "$CONDA_BASE/etc/profile.d/conda.sh"
+  conda activate "$CONDA_ENV"
+fi
+
 if ! command -v Rscript &>/dev/null; then
-  echo "ERROR: Rscript is not on PATH. Set R_MODULE, or load R another way." >&2
+  echo "ERROR: Rscript is not on PATH." >&2
+  echo "Set R_MODULE, or CONDA_ENV, or activate your environment before sbatch." >&2
   exit 1
 fi
 
@@ -101,7 +137,10 @@ echo "job          : ${SLURM_JOB_ID:-<interactive>} on $(hostname)"
 echo "project root : $PWD"
 echo "steps        : ${STEPS:-all (1-9)}"
 echo "cpus / mem   : $CPUS / ${SLURM_MEM_PER_NODE:-?} MB"
-echo "R            : $(command -v Rscript) ($(Rscript -e 'cat(R.version.string)'))"
+echo "R            : $(command -v Rscript)"
+echo "               $(Rscript -e 'cat(R.version.string)' 2>/dev/null)"
+[[ -n "${CONDA_PREFIX:-}" ]] && echo "conda env    : $CONDA_PREFIX"
+echo "R_LIBS_USER  : ${R_LIBS_USER:-<unset>}"
 echo "started      : $(date)"
 echo "=========================================================="
 
