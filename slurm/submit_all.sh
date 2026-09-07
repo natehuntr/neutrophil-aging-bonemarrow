@@ -95,6 +95,48 @@ wanted() {
   return 1
 }
 
+# Preflight: check the R that these jobs will use can actually load the core
+# packages. Jobs inherit this shell's environment via --export=ALL, so testing
+# here is representative, and it costs a second instead of three failed jobs.
+# Set SKIP_PREFLIGHT=1 to bypass (e.g. the compute nodes see a different R).
+if [[ -z "${SKIP_PREFLIGHT:-}" && -z "${DRY_RUN:-}" ]]; then
+  if ! command -v Rscript &>/dev/null; then
+    echo "ERROR: no Rscript on PATH. Activate your R environment first, e.g." >&2
+    echo "  conda activate <env> && ./slurm/submit_all.sh $*" >&2
+    exit 1
+  fi
+
+  missing=$(Rscript -e '
+    pkgs <- c("Seurat","Matrix","dplyr","tidyr","tibble","purrr","ggplot2",
+              "patchwork","matrixStats","pheatmap","yaml","scales")
+    cat(paste(pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)],
+              collapse = ", "))' 2>/dev/null)
+
+  if [[ -n "$missing" ]]; then
+    cat >&2 <<MSG
+ERROR: the R on PATH cannot load: $missing
+
+  Rscript : $(command -v Rscript)
+  conda   : ${CONDA_PREFIX:-<none active>}
+
+Jobs inherit this environment, so they would fail the same way. Activate the
+environment you ran the earlier steps in, then resubmit:
+
+  conda activate <env>
+  ./slurm/submit_all.sh $*
+
+To find which environment has them:
+  for e in \$(conda env list | awk '/^[^#]/{print \$1}'); do
+    echo -n "\$e: "; conda run -n "\$e" Rscript -e 'cat(as.character(packageVersion("Seurat")))' 2>/dev/null || echo "-"
+  done
+
+Set SKIP_PREFLIGHT=1 to submit anyway.
+MSG
+    exit 1
+  fi
+  echo "preflight: $(command -v Rscript) has the core packages"
+fi
+
 declare -A JOB_ID=()
 
 for step in 1 2 3 4 5 6 7 8 9; do

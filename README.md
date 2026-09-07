@@ -220,6 +220,12 @@ now filters counts, pseudotime, weights and conditions to one common set of
 cells and asserts they agree before calling `fitGAM`. Cells at a timepoint
 outside `analysis.age_levels` are the usual source: they become NA conditions.
 
+**`missing packages: Seurat, Matrix, dplyr, ...`** from a SLURM job. The job
+found an R, but not the one your packages are installed in. `submit_all.sh`
+now checks this before submitting anything and names the R it tested. Activate
+the environment the earlier steps ran in and resubmit; jobs inherit it through
+`--export=ALL`.
+
 **`unable to load shared object '.../conda/envs/<env>/lib/libstdc++.so.6'`**.
 Two R installations are mixed: one R is running while the libraries come from
 another. Usually an environment module loaded on top of an active conda
