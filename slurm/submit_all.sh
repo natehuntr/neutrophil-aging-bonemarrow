@@ -111,12 +111,16 @@ wanted() {
 if [[ -z "${SKIP_PREFLIGHT:-}" && -z "${DRY_RUN:-}" ]]; then
   # Test the same R the jobs will get: if a module was named, load it here too.
   if [[ -n "${R_MODULE:-}" ]] && command -v module &>/dev/null; then
-    module load "$R_MODULE" || true
+    # R_MODULE may name several modules; quoting the whole string asks Lmod for
+    # one module with a space in its name.
+    for _m in $R_MODULE; do module load "$_m" || true; done
   fi
 
   if ! command -v Rscript &>/dev/null; then
-    echo "ERROR: no Rscript on PATH. Activate your R environment first, e.g." >&2
-    echo "  conda activate <env> && ./slurm/submit_all.sh $*" >&2
+    echo "ERROR: no Rscript on PATH after loading '${R_MODULE:-<none>}'." >&2
+    echo "Check R_MODULE in slurm/env.local.sh against:" >&2
+    echo "  module -t avail | grep '^R/'" >&2
+    echo "Or activate an environment providing R before submitting." >&2
     exit 1
   fi
 
