@@ -49,7 +49,11 @@ cran <- c(
   "yaml", "here", "dplyr", "tidyr", "tibble", "purrr", "readr", "glue",
   "ggplot2", "patchwork", "pheatmap", "matrixStats", "Matrix", "scales",
   "Seurat", "SeuratObject", "R.utils", "ggVennDiagram", "clustree",
-  "msigdbr", "remotes", "BiocManager"
+  "msigdbr", "remotes", "BiocManager",
+  # monocle3's dependencies, installed here rather than left to it, so the
+  # API-free route below has everything it needs already present. sf and
+  # spdep need GDAL/GEOS/PROJ; units needs UDUNITS. See slurm/env.local.sh.
+  "sf", "units", "spdep", "terra", "leidenbase", "RhpcBLASctl"
 )
 
 bioc <- c(
@@ -57,6 +61,36 @@ bioc <- c(
   "SingleCellExperiment", "SummarizedExperiment", "fgsea", "tradeSeq",
   "clusterProfiler", "org.Mm.eg.db", "EnsDb.Mmusculus.v79", "batchelor"
 )
+
+#' Install only what is absent, and report what was attempted.
+install_missing <- function(pkgs, installer, label) {
+  missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  cat("\n", label, ": ", length(missing), " of ", length(pkgs),
+      " to install\n", sep = "")
+  if (!length(missing)) return(invisible(character()))
+  cat("  ", paste(missing, collapse = ", "), "\n", sep = "")
+  installer(missing)
+  invisible(missing)
+}
+
+install_missing(cran, function(p) install.packages(p), "CRAN")
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+# BiocManager picks the Bioconductor release matching this R. Its repositories
+# are added to the CRAN ones already set, rather than replacing them, so the
+# snapshot fallback still applies to Bioconductor's own CRAN dependencies.
+if (requireNamespace("BiocManager", quietly = TRUE)) {
+  cat("\nBioconductor version: ",
+      as.character(BiocManager::version()), "\n", sep = "")
+  install_missing(bioc,
+                  function(p) BiocManager::install(p, ask = FALSE, update = FALSE),
+                  "Bioconductor")
+} else {
+  warning("BiocManager could not be installed; every Bioconductor package ",
+          "will be missing")
+}
 
 # GitHub packages. Installed from the codeload archive endpoint rather than
 # through install_github(), because that uses the GitHub *API*, whose
@@ -128,6 +162,14 @@ install_from_github <- function(name, repo, subdir = NULL,
 
     if (attempt(paste0("source archive ", repo, "@", branch),
                 remotes::install_local(path, upgrade = "never", dependencies = TRUE)))
+      return(TRUE)
+
+    # remotes reads the package's Remotes: field and resolves those entries
+    # through the GitHub API even when the source is already on disk, so the
+    # rate limit bites a local install too. R CMD INSTALL ignores Remotes
+    # entirely; the dependencies it needs are in the CRAN list above.
+    if (attempt(paste0("R CMD INSTALL of ", repo, "@", branch, " (ignores Remotes:)"),
+                utils::install.packages(path, repos = NULL, type = "source")))
       return(TRUE)
   }
 
