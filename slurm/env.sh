@@ -7,6 +7,16 @@
 #
 # Values already in the environment win, so a one-off override still works:
 #   R_MODULE=R/4.4.0-gfbf-2023b ./slurm/submit_all.sh 7
+#
+# That also means re-sourcing this file after editing it does NOT pick up the
+# change in a shell that already sourced it -- the old exported value wins. To
+# see what the file itself says, read it in a clean environment:
+#
+#   env -u R_MODULE -u R_LIBS_USER bash -c 'source slurm/env.sh; echo "$R_LIBS_USER"'
+#
+# Submitted jobs are unaffected: they start from the submitting shell, so a
+# stale value there does propagate -- unset it or open a new shell after an
+# edit.
 # ---------------------------------------------------------------------------
 
 # An environment module providing R. Leave empty if R is already on PATH (e.g.
