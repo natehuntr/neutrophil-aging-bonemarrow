@@ -61,6 +61,16 @@ R_LIBS_USER="${R_LIBS_USER:-$HOME/R/library-${R_MODULE//\//-}}"
 
 export R_MODULE R_LIBS_USER
 
+# A GitHub token, if one was set in env.local.sh. Exported so R's remotes
+# package can see it -- a plain assignment there is a shell variable only.
+# It raises the GitHub API limit from 60 requests per hour per IP (shared with
+# every other user of this cluster) to 5000 per hour for you alone.
+[[ -n "${GITHUB_PAT:-}" ]] && export GITHUB_PAT
+
+# A dated CRAN snapshot used as a fallback repository when current CRAN carries
+# only versions that need a newer R than this one.
+[[ -n "${CRAN_SNAPSHOT:-}" ]] && export CRAN_SNAPSHOT
+
 # ---------------------------------------------------------------------------
 # Ignore personal R startup files for pipeline runs.
 #
