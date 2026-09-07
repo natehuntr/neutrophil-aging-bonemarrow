@@ -24,15 +24,47 @@ cd "${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 [[ -f config/config.yml ]] || { echo "ERROR: run from the project root" >&2; exit 1; }
 mkdir -p logs
 
-# shellcheck disable=SC1091
-[[ -f slurm/env.sh ]] && source slurm/env.sh
+if [[ -f slurm/env.sh ]]; then
+  # shellcheck disable=SC1091
+  source slurm/env.sh
+else
+  echo "WARNING: slurm/env.sh not found; falling back to the environment" >&2
+fi
 
-if [[ -n "${R_MODULE:-}" ]] && command -v module &>/dev/null; then
+# Everything below runs under `set -u`, so give these definite values rather
+# than referencing them bare and failing with "unbound variable".
+R_MODULE="${R_MODULE:-}"
+R_LIBS_USER="${R_LIBS_USER:-}"
+
+if [[ -n "$R_MODULE" ]] && command -v module &>/dev/null; then
   module load "$R_MODULE"
 fi
-command -v Rscript &>/dev/null || { echo "ERROR: no Rscript on PATH" >&2; exit 1; }
+command -v Rscript &>/dev/null || {
+  echo "ERROR: no Rscript on PATH after loading '${R_MODULE:-<none>}'." >&2
+  echo "Set R_MODULE in slurm/env.sh to a module from: module -t avail | grep '^R/'" >&2
+  exit 1
+}
 
-mkdir -p "$R_LIBS_USER"
+if [[ -z "$R_LIBS_USER" ]]; then
+  cat >&2 <<MSG
+ERROR: R_LIBS_USER is empty, so there is nowhere to install to.
+
+Set it in slurm/env.sh, on storage the compute nodes can see and with room for
+several GB -- a home directory is usually too small:
+
+  R_LIBS_USER="\${R_LIBS_USER:-/path/to/lab/storage/R/library-\${R_MODULE//\//-}}"
+
+Current slurm/env.sh:
+$(sed -n '/^R_MODULE=/p;/^R_LIBS_USER=/p' slurm/env.sh 2>/dev/null || echo '  <file not found>')
+MSG
+  exit 1
+fi
+
+mkdir -p "$R_LIBS_USER" || {
+  echo "ERROR: cannot create $R_LIBS_USER -- check the path and your quota." >&2
+  exit 1
+}
+export R_LIBS_USER
 
 echo "R          : $(command -v Rscript)"
 echo "             $(Rscript -e 'cat(R.version.string)')"

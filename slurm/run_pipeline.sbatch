@@ -90,6 +90,10 @@ if [[ -f slurm/env.sh ]]; then
   # shellcheck disable=SC1091
   source slurm/env.sh
 fi
+# Definite values: everything below runs under `set -u`.
+R_MODULE="${R_MODULE:-}"
+CONDA_ENV="${CONDA_ENV:-}"
+[[ -n "${R_LIBS_USER:-}" ]] && export R_LIBS_USER
 
 if [[ -n "$R_MODULE" && -n "$CONDA_ENV" ]]; then
   echo "ERROR: set R_MODULE or CONDA_ENV, not both." >&2
