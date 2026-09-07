@@ -46,7 +46,12 @@ cat("parallel jobs  :", getOption("Ncpus"), "\n")
 # consistent. Current CRAN stays as a fallback for anything the snapshot lacks.
 SNAPSHOT <- Sys.getenv("CRAN_SNAPSHOT",
                        unset = "https://packagemanager.posit.co/cran/2024-04-15")
-options(repos = c(SNAPSHOT = SNAPSHOT, CRAN = "https://cloud.r-project.org"))
+# The snapshot is named "CRAN" deliberately. BiocManager builds its repository
+# set from getOption("repos")[["CRAN"]] and ignores every other entry -- the log
+# line "Replacement repositories: CRAN: https://cloud.r-project.org" is it
+# announcing that it took the entry with that name. Naming the snapshot CRAN is
+# the only way to make Bioconductor's dependencies come from the same era.
+options(repos = c(CRAN = SNAPSHOT, CURRENT = "https://cloud.r-project.org"))
 cat("repositories   :\n")
 cat(paste0("  ", names(getOption("repos")), ": ", getOption("repos")), sep = "\n")
 cat("\n")
@@ -86,6 +91,30 @@ install_missing <- function(pkgs, installer, label) {
   invisible(missing)
 }
 
+# ---------------------------------------------------------------------------
+# Header-only packages pinned to the snapshot, installed rather than merely
+# offered.
+#
+# BH and RcppArmadillo ship C++ headers that other packages compile against, so
+# the version ON DISK decides whether a build succeeds -- not the version a
+# repository offers. Current BH and RcppArmadillo require C++14 or later, while
+# Bioconductor 3.18 packages pin CXX_STD = CXX11, and that combination is what
+# produces "'is_final' has not been declared in 'std'" from fgsea and "C++14
+# compiler required" from glmGamPoi. Once the newer headers are installed,
+# fixing the repositories is not enough; they have to be replaced.
+#
+# Both are header-only, so installing an older version cannot break anything
+# already compiled: nothing links against them at run time.
+ERA_PINNED <- c("BH", "RcppArmadillo")
+cat("\nPinning to the snapshot (headers other packages compile against):\n")
+cat("  ", paste(ERA_PINNED, collapse = ", "), "\n", sep = "")
+for (p in ERA_PINNED) {
+  before <- tryCatch(as.character(utils::packageVersion(p)), error = function(e) "absent")
+  install.packages(p, repos = c(CRAN = SNAPSHOT))
+  after <- tryCatch(as.character(utils::packageVersion(p)), error = function(e) "absent")
+  cat("  ", p, ": ", before, " -> ", after, "\n", sep = "")
+}
+
 install_missing(cran, function(p) install.packages(p), "CRAN")
 
 if (!requireNamespace("BiocManager", quietly = TRUE))
@@ -114,12 +143,17 @@ if (requireNamespace("BiocManager", quietly = TRUE)) {
 #
 # Setting GITHUB_PAT (in slurm/env.local.sh) raises the API limit and is worth
 # doing, but this path does not need it.
-github <- list(
+github <- Filter(Negate(is.null), list(
   list(name = "monocle3",       repo = "cole-trapnell-lab/monocle3"),
-  list(name = "SeuratWrappers", repo = "satijalab/seurat-wrappers"),
+  # Only used by to_cds(), i.e. building a monocle3 object from a Seurat one in
+  # step 5. Its dependency tree now pulls in Banksy, liger, hdf5r and RcppPlanc,
+  # which fail on this toolchain and which nothing here needs. Set
+  # INSTALL_SEURATWRAPPERS=1 to attempt it anyway.
+  if (nzchar(Sys.getenv("INSTALL_SEURATWRAPPERS")))
+    list(name = "SeuratWrappers", repo = "satijalab/seurat-wrappers"),
   list(name = "CytoTRACE2",     repo = "digitalcytometry/cytotrace2",
        subdir = "cytotrace2_r")
-)
+))
 
 #' Install one package from GitHub, trying each route that avoids the API.
 #'
@@ -255,7 +289,9 @@ needed_by <- list(
   "clusterProfiler"      = "4",
   "org.Mm.eg.db"         = "4",
   "monocle3"             = "5, 7, 9",
-  "SeuratWrappers"       = "5",
+  # step 5 is complete once combined_cds.rds exists, so this only matters if
+  # the trajectory is rebuilt from scratch
+  "SeuratWrappers"       = "5 (only if rebuilding the trajectory)",
   "tradeSeq"             = "5",
   "glmGamPoi"            = "2, 3, 7",
   "fgsea"                = "8",
