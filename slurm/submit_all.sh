@@ -100,6 +100,11 @@ wanted() {
 # here is representative, and it costs a second instead of three failed jobs.
 # Set SKIP_PREFLIGHT=1 to bypass (e.g. the compute nodes see a different R).
 if [[ -z "${SKIP_PREFLIGHT:-}" && -z "${DRY_RUN:-}" ]]; then
+  # Test the same R the jobs will get: if a module was named, load it here too.
+  if [[ -n "${R_MODULE:-}" ]] && command -v module &>/dev/null; then
+    module load "$R_MODULE" || true
+  fi
+
   if ! command -v Rscript &>/dev/null; then
     echo "ERROR: no Rscript on PATH. Activate your R environment first, e.g." >&2
     echo "  conda activate <env> && ./slurm/submit_all.sh $*" >&2
@@ -151,9 +156,15 @@ for step in 1 2 3 4 5 6 7 8 9; do
   done
   [[ -n "$dep_list" ]] && dep_args="--dependency=afterok:${dep_list}"
 
+  # --export=ALL already carries the submitting environment; naming these
+  # explicitly means they work even if the caller set them without exporting.
+  export_list="ALL,STEPS=$step,PROJECT_DIR=$PROJECT_DIR"
+  [[ -n "${R_MODULE:-}" ]]  && export_list="$export_list,R_MODULE=$R_MODULE"
+  [[ -n "${CONDA_ENV:-}" ]] && export_list="$export_list,CONDA_ENV=$CONDA_ENV"
+
   # shellcheck disable=SC2046
   cmd=(sbatch --parsable --job-name="bm-step${step}" $(resources_for "$step")
-       ${dep_args:+$dep_args} --export=ALL,STEPS="$step",PROJECT_DIR="$PROJECT_DIR" "$SBATCH_SCRIPT")
+       ${dep_args:+$dep_args} --export="$export_list" "$SBATCH_SCRIPT")
 
   if [[ -n "${DRY_RUN:-}" ]]; then
     printf '%s\n' "${cmd[*]}"
