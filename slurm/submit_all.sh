@@ -127,22 +127,27 @@ if [[ -z "${SKIP_PREFLIGHT:-}" && -z "${DRY_RUN:-}" ]]; then
               collapse = ", "))' 2>/dev/null)
 
   if [[ -n "$missing" ]]; then
+    libs=$(Rscript -e 'cat(paste(" ", .libPaths()), sep = "\n")' 2>/dev/null)
     cat >&2 <<MSG
 ERROR: the R on PATH cannot load: $missing
 
-  Rscript : $(command -v Rscript)
-  conda   : ${CONDA_PREFIX:-<none active>}
+  Rscript     : $(command -v Rscript)
+  R_MODULE    : ${R_MODULE:-<none>}
+  R_LIBS_USER : ${R_LIBS_USER:-<unset>}
+  conda       : ${CONDA_PREFIX:-<none active>}
 
-Jobs inherit this environment, so they would fail the same way. Activate the
-environment you ran the earlier steps in, then resubmit:
+  library search path:
+$libs
 
-  conda activate <env>
-  ./slurm/submit_all.sh $*
+Jobs inherit this environment, so they would fail the same way.
 
-To find which environment has them:
-  for e in \$(conda env list | awk '/^[^#]/{print \$1}'); do
-    echo -n "\$e: "; conda run -n "\$e" Rscript -e 'cat(as.character(packageVersion("Seurat")))' 2>/dev/null || echo "-"
-  done
+If the packages were never installed, or the install did not finish:
+
+  sbatch slurm/install_dependencies.sbatch
+  grep -iE "ERROR|non-zero exit|had non-zero" logs/bm-install-*.out | head
+
+If they are installed but somewhere not on the search path above, point
+R_LIBS_USER at that directory in slurm/env.sh.
 
 Set SKIP_PREFLIGHT=1 to submit anyway.
 MSG
