@@ -40,8 +40,12 @@ if [[ -f "$_env_dir/env.local.sh" ]]; then
 fi
 unset _env_dir
 
-# An environment module providing R. Leave empty if R is already on PATH (e.g.
-# a conda environment activated before submitting).
+# Environment module(s) providing R, space-separated. Several packages need
+# system libraries that EasyBuild ships as their own modules -- sf needs GDAL,
+# GEOS and PROJ; ragg needs libwebp, freetype and harfbuzz -- and monocle3
+# needs sf. Find them with:
+#   module -t avail | grep -iE '^(GDAL|GEOS|PROJ|UDUNITS|libwebp|freetype)/'
+# Leave empty if R is already on PATH (e.g. an activated conda environment).
 R_MODULE="${R_MODULE:-R/4.3.2-gfbf-2023a}"
 
 # Where the pipeline's own packages live. Two requirements:

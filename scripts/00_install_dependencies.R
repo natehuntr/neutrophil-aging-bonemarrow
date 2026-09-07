@@ -22,7 +22,28 @@ if (nzchar(lib)) {
   .libPaths(c(lib, .libPaths()))
 }
 cat("installing into:", .libPaths()[1], "\n")
-cat("parallel jobs  :", getOption("Ncpus"), "\n\n")
+cat("parallel jobs  :", getOption("Ncpus"), "\n")
+
+# ---------------------------------------------------------------------------
+# Repositories.
+#
+# Current CRAN only carries the newest version of each package, and those
+# increasingly require a newer R than a cluster module provides. R then reports
+# "package 'Matrix' is not available for this version of R" and every package
+# depending on it fails too -- one incompatible recommended package takes out
+# twenty others.
+#
+# A dated snapshot is added as a SECOND repository. install.packages() picks
+# the highest version that satisfies this R's version requirement across all
+# repositories, so packages current CRAN can serve still come from there, and
+# only the ones it cannot fall back to the snapshot. The default date predates
+# Matrix 1.7-0, which is the release that requires R >= 4.4.
+SNAPSHOT <- Sys.getenv("CRAN_SNAPSHOT",
+                       unset = "https://packagemanager.posit.co/cran/2024-04-15")
+options(repos = c(CRAN = "https://cloud.r-project.org", SNAPSHOT = SNAPSHOT))
+cat("repositories   :\n")
+cat(paste0("  ", names(getOption("repos")), ": ", getOption("repos")), sep = "\n")
+cat("\n")
 
 cran <- c(
   "yaml", "here", "dplyr", "tidyr", "tibble", "purrr", "readr", "glue",

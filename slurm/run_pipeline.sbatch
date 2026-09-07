@@ -105,7 +105,9 @@ fi
 if [[ -n "$R_MODULE" ]]; then
   command -v module &>/dev/null || { echo "ERROR: R_MODULE is set but this node has no 'module' command." >&2; exit 1; }
   [[ -n "$MODULE_PURGE" ]] && { module purge || true; }
-  module load "$R_MODULE"
+  # R_MODULE may name several modules; sf and friends need GDAL/GEOS/PROJ
+  # loaded alongside R.
+  for _m in $R_MODULE; do module load "$_m"; done
 fi
 
 if [[ -n "$CONDA_ENV" ]]; then

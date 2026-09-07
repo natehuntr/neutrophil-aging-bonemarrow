@@ -37,7 +37,9 @@ R_MODULE="${R_MODULE:-}"
 R_LIBS_USER="${R_LIBS_USER:-}"
 
 if [[ -n "$R_MODULE" ]] && command -v module &>/dev/null; then
-  module load "$R_MODULE"
+  # R_MODULE may name several modules; sf and friends need GDAL/GEOS/PROJ
+  # loaded alongside R.
+  for _m in $R_MODULE; do module load "$_m"; done
 fi
 command -v Rscript &>/dev/null || {
   echo "ERROR: no Rscript on PATH after loading '${R_MODULE:-<none>}'." >&2
