@@ -33,14 +33,20 @@ cat("parallel jobs  :", getOption("Ncpus"), "\n")
 # depending on it fails too -- one incompatible recommended package takes out
 # twenty others.
 #
-# A dated snapshot is added as a SECOND repository. install.packages() picks
-# the highest version that satisfies this R's version requirement across all
-# repositories, so packages current CRAN can serve still come from there, and
-# only the ones it cannot fall back to the snapshot. The default date predates
-# Matrix 1.7-0, which is the release that requires R >= 4.4.
+# The snapshot is listed FIRST, and this matters more than it looks.
+# BiocManager pins Bioconductor to the release for this R -- 3.18 for R 4.3.2,
+# from late 2023. Taking CRAN dependencies from today instead pairs 2023
+# Bioconductor sources with 2026 CRAN headers, and they no longer agree about
+# the C++ standard: Bioconductor packages of that era pin CXX_STD = CXX11,
+# while current BH and RcppArmadillo need C++14 or later. The result is
+# hundreds of lines of "'is_final' has not been declared in 'std'" and
+# "C++14 compiler required" from fgsea, glmGamPoi and treeio.
+#
+# A snapshot from the same era as the Bioconductor release keeps both halves
+# consistent. Current CRAN stays as a fallback for anything the snapshot lacks.
 SNAPSHOT <- Sys.getenv("CRAN_SNAPSHOT",
                        unset = "https://packagemanager.posit.co/cran/2024-04-15")
-options(repos = c(CRAN = "https://cloud.r-project.org", SNAPSHOT = SNAPSHOT))
+options(repos = c(SNAPSHOT = SNAPSHOT, CRAN = "https://cloud.r-project.org"))
 cat("repositories   :\n")
 cat(paste0("  ", names(getOption("repos")), ": ", getOption("repos")), sep = "\n")
 cat("\n")
@@ -53,7 +59,14 @@ cran <- c(
   # monocle3's dependencies, installed here rather than left to it, so the
   # API-free route below has everything it needs already present. sf and
   # spdep need GDAL/GEOS/PROJ; units needs UDUNITS. See slurm/env.local.sh.
-  "sf", "units", "spdep", "terra", "leidenbase", "RhpcBLASctl"
+  "sf", "units", "spdep", "terra", "leidenbase", "RhpcBLASctl", "lme4", "pscl"
+)
+
+# Packages CRAN has archived, which no repository serves any more. monocle3
+# still declares speedglm as a dependency.
+archived <- list(
+  list(name = "speedglm",
+       url = "https://cran.r-project.org/src/contrib/Archive/speedglm/speedglm_0.3-5.tar.gz")
 )
 
 bioc <- c(
@@ -133,7 +146,25 @@ install_from_github <- function(name, repo, subdir = NULL,
     isTRUE(ok)
   }
 
-  # 1. Authenticated API, if a token is available.
+  # A token that is wrong is worse than no token at all: remotes sends it on
+  # every request, including the ones that would otherwise be anonymous, and
+  # GitHub answers 401 Bad credentials rather than serving the file. Check it
+  # once and drop it if it is not accepted.
+  if (nzchar(Sys.getenv("GITHUB_PAT"))) {
+    valid <- tryCatch({
+      con <- url("https://api.github.com/rate_limit", open = "r",
+                 headers = c(Authorization = paste("Bearer", Sys.getenv("GITHUB_PAT"))))
+      on.exit(close(con), add = TRUE)
+      length(readLines(con, n = 1, warn = FALSE)) > 0
+    }, error = function(e) FALSE)
+    if (!isTRUE(valid)) {
+      message("  GITHUB_PAT is set but GitHub rejects it -- ignoring it. ",
+              "Check for a truncated or expired token in slurm/env.local.sh.")
+      Sys.unsetenv("GITHUB_PAT")
+    }
+  }
+
+  # 1. Authenticated API, if a usable token is available.
   if (nzchar(Sys.getenv("GITHUB_PAT"))) {
     if (attempt("install_github (GITHUB_PAT is set)",
                 remotes::install_github(paste0(repo, if (!is.null(subdir)) paste0("/", subdir) else ""),
@@ -183,6 +214,13 @@ install_from_github <- function(name, repo, subdir = NULL,
   FALSE
 }
 
+for (spec in archived) {
+  if (requireNamespace(spec$name, quietly = TRUE)) next
+  message("  ", spec$name, ": installing from the CRAN archive")
+  tryCatch(install.packages(spec$url, repos = NULL, type = "source"),
+           error = function(e) message("    ", conditionMessage(e)))
+}
+
 for (spec in github)
   do.call(install_from_github, spec)
 
@@ -190,25 +228,54 @@ for (spec in github)
 # Report. install.packages() warns rather than errors on a failure, so without
 # this a run that installed nothing still looks like it worked.
 # ---------------------------------------------------------------------------
-required <- c(
-  # what R/packages.R attaches
-  "Seurat", "Matrix", "dplyr", "tidyr", "tibble", "purrr", "ggplot2",
-  "patchwork", "matrixStats", "pheatmap", "yaml", "scales",
-  # what individual steps need
-  "scDblFinder", "SingleCellExperiment", "SummarizedExperiment", "SingleR",
-  "celldex", "CytoTRACE2", "clustree", "glmGamPoi", "monocle3",
-  "SeuratWrappers", "tradeSeq", "fgsea", "msigdbr", "clusterProfiler",
-  "org.Mm.eg.db", "ggVennDiagram"
+# Which steps need what. A package missing here blocks only the steps listed
+# against it, and saying so is more useful than a flat list -- SeuratWrappers,
+# for instance, is used only when building a trajectory from a Seurat object,
+# so a finished step 5 does not need it again.
+needed_by <- list(
+  "Seurat"               = "all steps",
+  "Matrix"               = "all steps",
+  "dplyr"                = "all steps",
+  "tidyr"                = "all steps",
+  "tibble"               = "all steps",
+  "purrr"                = "all steps",
+  "ggplot2"              = "all steps",
+  "patchwork"            = "all steps",
+  "matrixStats"          = "all steps",
+  "pheatmap"             = "6",
+  "yaml"                 = "all steps",
+  "scales"               = "9",
+  "scDblFinder"          = "1",
+  "SingleCellExperiment" = "1, 2, 5, 7, 9",
+  "SummarizedExperiment" = "1, 2, 5, 7, 9",
+  "SingleR"              = "2",
+  "celldex"              = "2",
+  "CytoTRACE2"           = "2",
+  "clustree"             = "2",
+  "clusterProfiler"      = "4",
+  "org.Mm.eg.db"         = "4",
+  "monocle3"             = "5, 7, 9",
+  "SeuratWrappers"       = "5",
+  "tradeSeq"             = "5",
+  "glmGamPoi"            = "2, 3, 7",
+  "fgsea"                = "8",
+  "msigdbr"              = "8",
+  "ggVennDiagram"        = "5"
 )
+required <- names(needed_by)
 status <- vapply(required, requireNamespace, logical(1), quietly = TRUE)
 
-cat("\n", strrep("=", 60), "\n", sep = "")
+cat("\n", strrep("=", 68), "\n", sep = "")
 cat(sum(status), "of", length(status), "required packages available\n")
-cat(strrep("=", 60), "\n")
+cat(strrep("=", 68), "\n")
 if (any(!status)) {
-  cat("MISSING:\n")
-  cat(paste0("  ", names(status)[!status], collapse = "\n"), "\n")
+  missing_tbl <- data.frame(package = required[!status],
+                            blocks_steps = unlist(needed_by[!status]),
+                            row.names = NULL)
+  print(missing_tbl, row.names = FALSE)
   cat("\nSearch the install log for each name to see why.\n")
+  blocked <- sort(unique(unlist(strsplit(missing_tbl$blocks_steps, ", "))))
+  cat("Steps affected:", paste(blocked, collapse = ", "), "\n")
 } else {
   cat("Everything the pipeline needs is installed.\n")
 }

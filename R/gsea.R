@@ -88,10 +88,19 @@ fisher_z_contrast <- function(rho_male, rho_female, rho_flat = 0.10, clamp = 0.9
 }
 
 #' GO:BP gene sets restricted to the tested universe, so set sizes are honest.
+#'
+#' msigdbr renamed its arguments at version 10: category/subcategory became
+#' collection/subcollection. A cluster R pinned to an older Bioconductor era
+#' gets the older msigdbr, so the names are chosen at run time rather than
+#' assumed -- passing the wrong pair is an "unused argument" error, not a
+#' warning.
 gobp_pathways <- function(universe, cfg) {
-  gs <- msigdbr::msigdbr(species = "Mus musculus",
-                         collection = cfg$gsea$collection,
-                         subcollection = cfg$gsea$subcollection)
+  args <- if (utils::packageVersion("msigdbr") >= "10.0.0") {
+    list(collection = cfg$gsea$collection, subcollection = cfg$gsea$subcollection)
+  } else {
+    list(category = cfg$gsea$collection, subcategory = cfg$gsea$subcollection)
+  }
+  gs <- do.call(msigdbr::msigdbr, c(list(species = "Mus musculus"), args))
   pathways <- split(gs$gene_symbol, gs$gs_name)
   pathways <- lapply(pathways, function(g) intersect(unique(g), universe))
   pathways <- pathways[lengths(pathways) >= cfg$gsea$min_set_size]
