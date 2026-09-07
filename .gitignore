@@ -6,6 +6,10 @@ results/tables/*
 results/figures/*
 !results/**/.gitkeep
 
+# Site-specific SLURM settings, deliberately untracked so a pull cannot
+# revert them.
+slurm/env.local.sh
+
 # SLURM job output
 logs/*
 !logs/.gitkeep

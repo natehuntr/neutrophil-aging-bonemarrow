@@ -106,11 +106,12 @@ your cluster requires.
 
 **Getting R.** `slurm/env.sh` names the R module and package library once, and
 is sourced by the jobs, the submitter and the dependency installer, so they
-cannot drift apart. Edit its two lines for your site:
+cannot drift apart. It is tracked by git, so site settings go in an untracked
+file beside it that a pull cannot revert:
 
 ```bash
-R_MODULE="${R_MODULE:-R/4.3.2-gfbf-2023a}"
-R_LIBS_USER="${R_LIBS_USER:-/path/on/shared/storage/R/library-R-4.3.2}"
+cp slurm/env.local.sh.example slurm/env.local.sh
+$EDITOR slurm/env.local.sh          # R_MODULE and R_LIBS_USER
 ```
 
 Then install the packages once:
