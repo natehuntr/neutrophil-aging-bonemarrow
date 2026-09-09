@@ -77,7 +77,7 @@ resources_for() {
     1) echo "--time=04:00:00 --mem=64G  --cpus-per-task=4" ;;
     2) echo "--time=12:00:00 --mem=64G  --cpus-per-task=4" ;;
     3) echo "--time=08:00:00 --mem=96G  --cpus-per-task=4" ;;
-    4) echo "--time=04:00:00 --mem=48G  --cpus-per-task=4" ;;
+    4) echo "--time=12:00:00 --mem=48G  --cpus-per-task=4" ;;  # null model refits
     5) echo "--time=24:00:00 --mem=64G  --cpus-per-task=8" ;;
     6) echo "--time=12:00:00 --mem=48G  --cpus-per-task=4" ;;
     7) echo "--time=48:00:00 --mem=64G  --cpus-per-task=8" ;;

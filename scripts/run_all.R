@@ -13,7 +13,7 @@ steps <- c(
   "1" = "01_preprocess.R",
   "2" = "02_annotate.R",
   "3" = "03_merge.R",
-  "4" = "04_sex_differences.R",
+  "4" = "04_sex_candidates.R",
   "5" = "05_trajectory.R",
   "6" = "06_age_trends.R",
   "7" = "07_glm_models.R",

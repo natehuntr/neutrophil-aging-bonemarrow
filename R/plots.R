@@ -218,3 +218,123 @@ plot_distribution_by_age <- function(values, meta, cfg, xlab,
 
   patchwork::wrap_plots(ecdf_plot, density_plot, ncol = 1)
 }
+
+# ---------------------------------------------------------------------------
+# Confound diagnostics.
+#
+# Three figures that between them say whether any cross-sex number in this
+# project is interpretable. They belong at the front of a report, not in an
+# appendix: everything downstream is conditional on them.
+# ---------------------------------------------------------------------------
+
+#' Per-library UMI and gene-count distributions.
+#'
+#' The depth confound, shown rather than quoted. If the two libraries do not
+#' overlap, no amount of normalisation makes a cross-sex comparison safe.
+plot_depth_distributions <- function(obj, cfg, group_col = "sex") {
+  df <- data.frame(
+    group = as.character(obj[[group_col]][, 1]),
+    umis = obj$nCount_RNA,
+    genes = obj$nFeature_RNA
+  )
+  df <- df[stats::complete.cases(df), ]
+
+  medians <- stats::aggregate(cbind(umis, genes) ~ group, df, stats::median)
+  ratio <- max(medians$umis) / min(medians$umis)
+
+  umi_plot <- ggplot2::ggplot(df, ggplot2::aes(.data$umis, fill = .data$group)) +
+    ggplot2::geom_density(alpha = 0.4, colour = NA) +
+    ggplot2::geom_vline(data = medians,
+                        ggplot2::aes(xintercept = .data$umis, colour = .data$group),
+                        linetype = "dashed", show.legend = FALSE) +
+    ggplot2::scale_x_log10() +
+    ggplot2::labs(x = "UMIs per cell (log scale)", y = "Density", fill = NULL,
+                  title = sprintf("Median depth differs %.2fx between libraries", ratio),
+                  subtitle = "Sex is confounded with library, so this is the sex contrast's floor") +
+    ggplot2::theme_minimal(base_size = 12)
+
+  gene_plot <- ggplot2::ggplot(df, ggplot2::aes(.data$genes, fill = .data$group)) +
+    ggplot2::geom_density(alpha = 0.4, colour = NA) +
+    ggplot2::scale_x_log10() +
+    ggplot2::labs(x = "Genes detected per cell (log scale)", y = "Density", fill = NULL) +
+    ggplot2::theme_minimal(base_size = 12)
+
+  patchwork::wrap_plots(umi_plot, gene_plot, ncol = 1)
+}
+
+#' Detection rate in one group against the other, with the depth expectation.
+#'
+#' The most persuasive single exhibit available here. Under a pure depth
+#' difference the points follow a curve set by the depth ratio and nothing
+#' else; genes departing from it are the only ones a difference can be claimed
+#' for. Points below the diagonal that were called "up" in the shallower group
+#' are the incoherence made visible.
+plot_detection_scatter <- function(detection, groups, highlight = character()) {
+  cols <- paste0("pct_", groups)
+  df <- data.frame(x = detection[[cols[1]]], y = detection[[cols[2]]],
+                   gene = detection$gene)
+  df <- df[stats::complete.cases(df), ]
+
+  # Expected relationship if the only difference is capture probability:
+  # 1 - (1 - p)^r for depth ratio r, fitted on the observed pairs.
+  fit_ratio <- tryCatch(stats::optimise(function(r)
+    sum((1 - (1 - df$x)^r - df$y)^2), c(0.1, 10))$minimum, error = function(e) NA_real_)
+  curve <- data.frame(x = seq(0, 1, length.out = 200))
+  curve$y <- 1 - (1 - curve$x)^fit_ratio
+
+  p <- ggplot2::ggplot(df, ggplot2::aes(.data$x, .data$y)) +
+    ggplot2::geom_point(alpha = 0.15, size = 0.6) +
+    ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dotted") +
+    ggplot2::geom_line(data = curve, colour = "#B5482A", linewidth = 0.8) +
+    ggplot2::coord_equal() +
+    ggplot2::labs(x = paste("Fraction of", groups[1], "cells detecting the gene"),
+                  y = paste("Fraction of", groups[2], "cells detecting the gene"),
+                  title = "Detection rates track depth, not biology",
+                  subtitle = sprintf(paste("Red: expected under a pure capture difference",
+                                           "(fitted ratio %.2f). Dotted: equality."),
+                                     fit_ratio)) +
+    ggplot2::theme_minimal(base_size = 12)
+
+  if (length(highlight)) {
+    marked <- df[df$gene %in% highlight, ]
+    p <- p + ggplot2::geom_point(data = marked, colour = "#2C6E9B", size = 1.8) +
+      ggplot2::geom_text(data = marked, ggplot2::aes(label = .data$gene),
+                         size = 3, vjust = -0.8, colour = "#2C6E9B")
+  }
+  p
+}
+
+#' Retained-cell fraction through QC, by sex and stage.
+plot_retention <- function(retention, sex_col = "sex", stage_col = "stage") {
+  ggplot2::ggplot(retention, ggplot2::aes(x = .data[[stage_col]],
+                                          y = .data$retained_fraction,
+                                          fill = .data[[sex_col]])) +
+    ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.8), width = 0.7) +
+    ggplot2::geom_text(ggplot2::aes(label = .data$n_after),
+                       position = ggplot2::position_dodge(width = 0.8),
+                       vjust = -0.4, size = 3) +
+    ggplot2::scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                                limits = c(0, 1.05)) +
+    ggplot2::labs(x = NULL, y = "Cells retained through QC", fill = NULL,
+                  title = "QC retention by stage and library",
+                  subtitle = "Unequal retention converts a depth difference into a composition one",
+                  caption = "Labels are cell counts after filtering") +
+    ggplot2::theme_minimal(base_size = 12)
+}
+
+#' All three confound diagnostics, written together.
+write_confound_diagnostics <- function(obj, cfg, retention = NULL,
+                                       detection = NULL, prefix = "confound") {
+  save_figure(plot_depth_distributions(obj, cfg), cfg,
+              paste0(prefix, "_depth_distributions.pdf"), width = 8, height = 7)
+
+  if (!is.null(detection))
+    save_figure(plot_detection_scatter(detection, cfg$analysis$sex_levels), cfg,
+                paste0(prefix, "_detection_scatter.pdf"), width = 7, height = 7)
+
+  if (!is.null(retention))
+    save_figure(plot_retention(retention), cfg,
+                paste0(prefix, "_qc_retention.pdf"), width = 9, height = 5)
+
+  invisible(TRUE)
+}

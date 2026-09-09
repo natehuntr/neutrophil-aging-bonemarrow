@@ -217,3 +217,33 @@ metadata_coverage <- function(obj, columns) {
     row.names = NULL
   )
 }
+
+# ---------------------------------------------------------------------------
+# Fail loudly.
+#
+# A reader skims past a missing table; a reader does not skim past an error.
+# The report previously rendered empty headline tables and nothing flagged it.
+# ---------------------------------------------------------------------------
+
+#' Stop if a table that should carry results is empty.
+require_rows <- function(x, what = deparse(substitute(x)), min_rows = 1) {
+  if (is.null(x))
+    stop("EMPTY RESULT: ", what, " is NULL. The step that produces it did not run.")
+  if (nrow(x) < min_rows)
+    stop("EMPTY RESULT: ", what, " has ", nrow(x), " rows (expected at least ",
+         min_rows, "). A headline table with no rows is a failure, not a result.")
+  invisible(x)
+}
+
+#' knitr::kable that refuses to render an empty headline table silently.
+#'
+#' `fatal = FALSE` downgrades to a visible callout in the rendered document,
+#' which is still impossible to skim past.
+kable_checked <- function(x, ..., what = deparse(substitute(x)), fatal = TRUE) {
+  if (is.null(x) || nrow(x) == 0) {
+    if (fatal) stop("EMPTY TABLE: ", what)
+    return(knitr::asis_output(sprintf(
+      "\n::: {style='border-left:4px solid #B5482A;padding:0.75em;background:#fdf0ed'}\n**EMPTY TABLE: `%s`** -- the step that fills it produced nothing. This is a\npipeline failure, not an absence of signal.\n:::\n", what)))
+  }
+  knitr::kable(x, ...)
+}
