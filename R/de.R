@@ -414,3 +414,199 @@ glm_hits_table <- function(out, calibration, z = NULL) {
   if (!is.null(z)) tb <- cbind(tb, z[match(tb$name, rownames(z)), , drop = FALSE])
   tb
 }
+
+# ---------------------------------------------------------------------------
+# Depth-aware effect sizes.
+#
+# avg_log2FC is incoherent under depth asymmetry. Seurat's LogNormalize
+# rescales each cell's total, but rescaling cannot restore a transcript that
+# was never captured, so detection rates stay biased and a fold change computed
+# from them inherits that bias -- which is how a gene can be called "up in
+# male" while being detected in fewer male cells.
+#
+# The replacement puts depth in the model rather than in the normalisation: a
+# negative-binomial GLM with library size as an explicit offset. The p-values
+# it produces are still per-cell and still answer a question about cells within
+# one library, so they are not carried into any reported table; the coefficient
+# and its standard error are what this is for.
+# ---------------------------------------------------------------------------
+
+#' NB-GLM log fold change with an explicit size-factor offset.
+#'
+#' @return one row per gene: the coefficient on `contrast`, its standard error
+#'   and a Wald confidence interval. No p-value column, deliberately.
+glm_effect_size <- function(counts, meta, contrast = "sex", covariates = character(),
+                            conf = 0.95) {
+  require_packages("glmGamPoi")
+
+  meta <- as.data.frame(meta)
+  terms <- c(contrast, covariates)
+  design <- stats::as.formula(paste("~", paste(terms, collapse = " + ")))
+
+  keep <- stats::complete.cases(meta[, terms, drop = FALSE])
+  if (sum(keep) < ncol(counts))
+    log_step(sprintf("  dropping %d cells with missing %s", sum(!keep),
+                     paste(terms, collapse = "/")))
+  counts <- counts[, keep, drop = FALSE]
+  meta <- droplevels(meta[keep, , drop = FALSE])
+
+  fit <- glmGamPoi::glm_gp(counts, design = design, col_data = meta,
+                           size_factors = "normed_sum", on_disk = FALSE)
+
+  # The contrast column is the one that is not the intercept and not a covariate.
+  coef_names <- colnames(fit$Beta)
+  target <- grep(paste0("^", contrast), coef_names, value = TRUE)[1]
+  if (is.na(target))
+    stop("no coefficient matching '", contrast, "' in: ", paste(coef_names, collapse = ", "))
+
+  estimate <- fit$Beta[, target]
+  # glm_gp reports overdispersion, not per-coefficient SEs, so the Wald SE comes
+  # from the deviance-based test it can run.
+  res <- glmGamPoi::test_de(fit, contrast = target)
+  se <- abs(estimate) / stats::qnorm(1 - res$pval / 2)
+  se[!is.finite(se)] <- NA_real_
+  z <- stats::qnorm(1 - (1 - conf) / 2)
+
+  data.frame(
+    gene = rownames(counts),
+    log2FC = estimate / log(2),
+    ci_lower = (estimate - z * se) / log(2),
+    ci_upper = (estimate + z * se) / log(2),
+    # Kept for diagnostics only, never for a reported table.
+    .pval_diagnostic = res$pval,
+    row.names = NULL, stringsAsFactors = FALSE
+  )
+}
+
+#' Detection rate per group, and the direction it points.
+#'
+#' The cheapest check on whether a fold change is real: a gene called higher in
+#' one group while being detected in fewer of that group's cells is describing
+#' depth, not biology.
+detection_rates <- function(counts, groups) {
+  detected <- lapply(split(seq_along(groups), groups), function(idx)
+    Matrix::rowMeans(counts[, idx, drop = FALSE] > 0))
+  out <- as.data.frame(detected)
+  names(out) <- paste0("pct_", names(detected))
+  out$gene <- rownames(counts)
+  out
+}
+
+#' Flag effect sizes that disagree with their own detection rates.
+flag_detection_conflict <- function(effects, detection, higher_in) {
+  cols <- grep("^pct_", names(detection), value = TRUE)
+  if (length(cols) != 2) return(effects)
+
+  merged <- merge(effects, detection, by = "gene", sort = FALSE)
+  higher_col <- paste0("pct_", higher_in)
+  other_col <- setdiff(cols, higher_col)
+
+  merged$detected_more_in_claimed_group <-
+    merged[[higher_col]] >= merged[[other_col]]
+  conflicts <- sum(merged$log2FC > 0 & !merged$detected_more_in_claimed_group,
+                   na.rm = TRUE)
+  up <- sum(merged$log2FC > 0, na.rm = TRUE)
+  if (up > 0)
+    log_step(sprintf("  %d of %d genes called up in %s are detected in FEWER %s cells (%.0f%%)",
+                     conflicts, up, higher_in, higher_in, 100 * conflicts / up))
+  merged
+}
+
+# ---------------------------------------------------------------------------
+# Age trends, calibrated against a permutation null.
+#
+# A bare |rho| cutoff has no null and is n-dependent, so the count of "changing"
+# genes it returns is largely a statement about how many cells the stratum had.
+# Permuting age within the stratum gives the rho distribution this stratum
+# produces by chance, and what gets reported is the excess over it.
+# ---------------------------------------------------------------------------
+
+#' Null distribution of |rho| from permuted age labels.
+age_trend_null <- function(obj, age_levels, n_perm = 100, age_col = "age",
+                           assay = "RNA", seed = 42) {
+  expr <- Seurat::GetAssayData(obj, assay = assay, layer = "data")
+  ages <- as.character(obj[[age_col]][, 1])
+
+  vapply(seq_len(n_perm), function(i) {
+    set.seed(seed + i)
+    shuffled <- sample(ages)
+    numeric_age <- as.numeric(factor(shuffled, levels = age_levels))
+    max(abs(spearman_rows(expr, numeric_age)$rho), na.rm = TRUE)
+  }, numeric(1))
+}
+
+#' Genes whose age trend exceeds what permutation produces for this stratum.
+#'
+#' Reports excess over null rather than a raw count, so strata of different
+#' sizes can be compared. A stratum below the gate returns NULL rather than a
+#' number, since a count from 6 cells is not a smaller version of a count from
+#' 600 -- it is not a measurement.
+age_trend_excess <- function(obj, cfg, age_levels = cfg$analysis$age_levels,
+                             age_col = "age", assay = "RNA", n_perm = 100,
+                             label = "") {
+  n_by_age <- table(as.character(obj[[age_col]][, 1]))
+  if (!stratum_is_usable(n_by_age, label, cfg)) return(NULL)
+
+  observed <- age_trend_test(obj, age_levels, age_col, assay)
+  null_max <- age_trend_null(obj, age_levels, n_perm, age_col, assay, cfg$seed)
+  threshold <- stats::quantile(null_max, 0.95, names = FALSE, na.rm = TRUE)
+
+  n_observed <- sum(abs(observed$rho) > threshold, na.rm = TRUE)
+  log_step(sprintf("  %s: |rho| threshold from permutation = %.3f; %d genes exceed it",
+                   label, threshold, n_observed))
+
+  list(trend = observed,
+       null_threshold = threshold,
+       null_max = null_max,
+       n_exceeding = n_observed,
+       changing_genes = observed[which(abs(observed$rho) > threshold), ],
+       n_cells = as.integer(n_by_age))
+}
+
+# ---------------------------------------------------------------------------
+# Set-level scoring.
+#
+# Coherence across a module survives depth noise that no individual gene
+# survives, which is why a pathway can be the strongest result in a dataset
+# where one or two of its genes reach significance. Module scores lead; gene
+# hits illustrate.
+# ---------------------------------------------------------------------------
+
+#' Rank-based module scores (UCell), which depend on gene ordering within a
+#' cell rather than on absolute counts, and so are far less depth-sensitive
+#' than a mean-expression score.
+add_module_scores_ucell <- function(obj, signatures, assay = "RNA", suffix = "_UCell") {
+  require_packages("UCell")
+  UCell::AddModuleScore_UCell(obj, features = signatures, assay = assay, name = suffix)
+}
+
+#' Compare a module score between two groups, as an effect size with a CI.
+module_effect <- function(obj, score_col, group_col, groups, n_boot = 1000) {
+  values <- obj@meta.data[[score_col]]
+  labels <- as.character(obj[[group_col]][, 1])
+
+  a <- values[labels == groups[1]]
+  b <- values[labels == groups[2]]
+  a <- a[is.finite(a)]; b <- b[is.finite(b)]
+  if (length(a) < 3 || length(b) < 3)
+    return(data.frame(module = score_col, effect_size = NA_real_,
+                      ci_lower = NA_real_, ci_upper = NA_real_,
+                      direction = NA_character_, n_min = min(length(a), length(b))))
+
+  # Standardised mean difference, so modules with different score ranges are
+  # comparable to each other.
+  pooled_sd <- sqrt(((length(a) - 1) * stats::var(a) + (length(b) - 1) * stats::var(b)) /
+                      (length(a) + length(b) - 2))
+  effect <- function(idx_a, idx_b) (mean(idx_a) - mean(idx_b)) / pooled_sd
+
+  boots <- vapply(seq_len(n_boot), function(i)
+    effect(sample(a, length(a), TRUE), sample(b, length(b), TRUE)), numeric(1))
+
+  data.frame(module = score_col,
+             effect_size = effect(a, b),
+             ci_lower = stats::quantile(boots, 0.025, names = FALSE),
+             ci_upper = stats::quantile(boots, 0.975, names = FALSE),
+             direction = if (mean(a) > mean(b)) groups[1] else groups[2],
+             n_min = min(length(a), length(b)),
+             stringsAsFactors = FALSE)
+}
