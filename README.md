@@ -4,6 +4,43 @@ CITE-seq analysis of bone marrow granulopoiesis across the mouse lifespan
 (3, 9, 12 and 18 months), one hashed 10x run per sex, with a paired antibody
 panel (ADT) and hashtag oligos (HTO) multiplexing the ages within each run.
 
+## What this pipeline is for
+
+**It does not test sex differences. It generates a ranked,
+robustness-annotated candidate list for orthogonal validation.**
+
+Sex is completely confounded with library, sequencing run, probe barcode and
+staining batch, and the deeper library captures several-fold more per cell.
+There is one hashtag per age, so there is no biological replication at the
+analysis level, and the mice are inbred, so genotype demultiplexing cannot
+recover individuals — isogenic animals carry essentially no distinguishing
+SNPs, and mitochondrial demultiplexing fails for the same reason. Individual
+mouse resolution is permanently unrecoverable and pseudobulk is impossible.
+
+Six mice are pooled per hashtag (48 total). That is worth stating precisely,
+because it is the most likely thing to be misread:
+
+> **Pooling improved precision. It did nothing to accuracy.**
+
+A pooled mean is a better estimate of the population than one animal would
+give — an outlier mouse is diluted rather than driving the group. But cells
+cannot be traced back to animals, so between-animal variance stays
+unmeasurable, and the depth asymmetry, the sex–library confound and the
+differential QC recovery are all untouched by how many mice went into each tag.
+Pooling means the confounded quantity has been measured very well.
+
+So for each candidate the pipeline reports an effect size with a confidence
+interval, behaviour under depth matching, position relative to the known bias
+direction, where it sits against the within-library null, and **which
+orthogonal assay could test it**. The inferential layer comes from the
+functional panels (NETs, ROS, phagocytosis, glucose uptake, mitochondrial
+content, CBC), not from here. A candidate with no proposed orthogonal test is
+a number, not a finding.
+
+Age comparisons are different and are not confounded: hashing is
+antibody-based and unaffected by strain, all ages share a library, and each tag
+is a pool rather than one mouse. Those results stand on their own terms.
+
 This is a self-contained project: clone it, point `config/config.yml` at the
 Cell Ranger output, and run.
 
@@ -60,7 +97,7 @@ docs/               provenance and notes
 | 1 | `01_preprocess.R` | `<sex>_filtered.rds` — QC-filtered, demultiplexed, ADT/HTO assays attached |
 | 2 | `02_annotate.R` | `<sex>_annotated.rds`, `<sex>_neustem.rds` — reductions, SingleR labels, CytoTRACE2 potency |
 | 3 | `03_merge.R` | `bm_merged.rds`, `gmp_neutrophils.rds` — both sexes, granulocytes staged |
-| 4 | `04_sex_differences.R` | per-age male-vs-female DEGs (RNA and ADT) plus GO ORA |
+| 4 | `04_sex_candidates.R` | gates, depth matching, set-level effects within ADT-defined stage, the within-library null, and the candidate table |
 | 5 | `05_trajectory.R` | monocle3 trajectories per sex x age, tradeSeq GAMs |
 | 6 | `06_age_trends.R` | Spearman age trends and permutation-calibrated pairwise DE, per stage |
 | 7 | `07_glm_models.R` | NB-GLM omnibus, age x sex interaction, and the trajectory model |

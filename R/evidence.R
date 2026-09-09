@@ -18,9 +18,10 @@
 #' travels with the file rather than living in a methods paragraph.
 sex_contrast_caveat <- function(cfg) {
   sprintf(paste0("Sex is confounded with %s. %d mice pooled per hashtag (%d total): ",
-                 "pooling improves the accuracy of each group mean, not the precision, ",
-                 "and between-animal variance is unmeasurable. No inferential statistic ",
-                 "here describes mice."),
+                 "pooling improves precision, not accuracy -- the confounded quantity is ",
+                 "measured very well and remains confounded -- and between-animal variance ",
+                 "is unmeasurable, so precision cannot be quantified either. No inferential ",
+                 "statistic here describes mice."),
           paste(cfg$design$sex_confounded_with, collapse = ", "),
           cfg$design$mice_per_hashtag, cfg$design$total_mice)
 }

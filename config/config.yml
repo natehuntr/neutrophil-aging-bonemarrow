@@ -26,12 +26,23 @@ seed: 42
 # permanently unrecoverable, and pseudobulk is impossible rather than merely
 # inconvenient.
 #
-# Pooling several mice per hashtag improves the ACCURACY of each group's point
-# estimate -- one outlier animal is diluted rather than driving the group -- and
-# with 6 mice the pooled mean carries roughly sigma/sqrt(6) ~= 0.41x a single
-# animal's SD. It does nothing for PRECISION: cells cannot be traced to animals,
-# so between-animal variance stays unmeasurable. Pooling means the confounded
-# quantity is measured very well; it is still confounded.
+# Pooling several mice per hashtag improves PRECISION and does nothing for
+# ACCURACY, in the standard senses: precision is the variance of the estimate,
+# accuracy is freedom from systematic error.
+#
+#   Precision, improved. One outlier animal is diluted rather than driving the
+#   group, and with 6 mice the pooled mean carries roughly sigma/sqrt(6) ~=
+#   0.41x a single animal's SD. That makes the candidate RANKING better.
+#
+#   Accuracy, untouched. The depth asymmetry, the sex-library confound and the
+#   differential QC recovery do not care how many mice went into each tag. A
+#   precisely estimated biased quantity is still biased.
+#
+#   Precision cannot be QUANTIFIED either, which is a third thing: cells cannot
+#   be traced to animals, so between-animal variance is unmeasurable and no
+#   standard error can be attached to any of it.
+#
+# Pooling means the confounded quantity has been measured very well.
 design:
   mice_per_hashtag: 6
   # 2 sexes x 4 ages x 6 mice

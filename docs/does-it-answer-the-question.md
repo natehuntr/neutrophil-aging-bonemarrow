@@ -207,3 +207,63 @@ no batch confound. If the composition shift and the pseudotime shift point the
 same way, and the potency shift agrees with them, that is a real finding about
 these animals. If they disagree, the expression-level results should be
 treated as unexplained until they are reconciled.
+
+---
+
+# Addendum: the design is worse than this document assumed
+
+Written after a detailed review of the rendered report established three facts
+this assessment did not have.
+
+**Genotype demultiplexing is not a route to replication.** The mice are inbred.
+Souporcell and Vireo separate individuals by SNP genotype, and isogenic animals
+carry essentially no distinguishing variants; mitochondrial demultiplexing
+fails for the same reason, with Flex chemistry giving poor mitochondrial
+coverage on top. Individual-mouse resolution is permanently unrecoverable and
+pseudobulk is impossible rather than merely inconvenient. Anything that costs
+or schedules demultiplexing should be taken off the plan.
+
+**Six mice are pooled per hashtag** — 48 animals. This is better than one mouse
+per tag and is worth stating in the methods, but only for what it actually
+provides:
+
+> **Pooling improved precision. It did nothing to accuracy.**
+
+Precision is the variance of the estimate; accuracy is freedom from systematic
+error. Pooling dilutes an outlier animal and shrinks the sampling error of each
+group mean to roughly 0.41x a single animal's SD, which materially improves the
+candidate *ranking*. It leaves the depth asymmetry, the sex-library confound and
+the differential QC recovery exactly where they were. And because cells cannot
+be traced to animals, precision cannot be *quantified* either: no standard error
+can be attached to any of it.
+
+Note that the source brief states this both ways -- "you have improved accuracy
+with no way to quantify precision" in one paragraph and the headline above in
+the next. The headline is the statistically standard usage and is what the code
+follows; the earlier sentence reads as loose phrasing for the same underlying
+point. Worth settling before the phrase reaches a slide, since the two versions
+invite opposite conclusions.
+
+**The bias has a known direction**, which is what makes an asymmetric
+evidentiary standard possible. The deeper library is female, so a female-high
+result is the direction the confound already predicts and a male-high result had
+to overcome it. `annotate_bias()` marks every row accordingly.
+
+## What this changes about section 4's verdict
+
+The **age half** stands as written: ages share a library, hashing is
+antibody-based and unaffected by strain, and each tag is a pool rather than one
+mouse.
+
+The **sex half** was described here as "not answerable". That is right, and the
+consequence is larger than this document drew from it. The pipeline's output
+is now shaped as a candidate list for orthogonal validation rather than a
+results table, because no amount of statistical machinery converts this design
+into an inferential one. Per-cell p-values are removed from reported tables
+rather than carried with a caveat.
+
+The one genuine gain: a stable pooled effect size is exactly what is needed to
+**power the validation experiment**. Use these effect sizes as the prior for a
+power calculation on the functional panels, measured per animal. If any
+per-animal material was banked from those 48 mice, individual measurement on
+the flow assays is far cheaper than a new cohort.
