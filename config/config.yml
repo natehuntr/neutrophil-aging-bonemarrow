@@ -12,6 +12,42 @@ project: neutrophil-aging-bonemarrow
 seed: 42
 
 # ---------------------------------------------------------------------------
+# Design
+#
+# These are not tuning parameters. They record what the experiment can and
+# cannot support, and several analyses read them to decide what to refuse.
+#
+# Sex is completely confounded with library, run, probe barcode and staining
+# batch. One hashtag per age means there is no biological replication at the
+# analysis level, and the mice are inbred, so genotype demultiplexing cannot
+# recover individuals: isogenic animals carry essentially no distinguishing
+# SNPs, and mitochondrial demultiplexing fails for the same reason (plus Flex
+# chemistry gives poor mitochondrial coverage). Individual-mouse resolution is
+# permanently unrecoverable, and pseudobulk is impossible rather than merely
+# inconvenient.
+#
+# Pooling several mice per hashtag improves the ACCURACY of each group's point
+# estimate -- one outlier animal is diluted rather than driving the group -- and
+# with 6 mice the pooled mean carries roughly sigma/sqrt(6) ~= 0.41x a single
+# animal's SD. It does nothing for PRECISION: cells cannot be traced to animals,
+# so between-animal variance stays unmeasurable. Pooling means the confounded
+# quantity is measured very well; it is still confounded.
+design:
+  mice_per_hashtag: 6
+  # 2 sexes x 4 ages x 6 mice
+  total_mice: 48
+  # What the sex contrast is confounded with. Reported alongside every
+  # cross-sex result rather than kept in a methods paragraph.
+  sex_confounded_with: [library, sequencing run, probe barcode, staining batch]
+  # The bias direction is known and measurable, which is what makes an
+  # asymmetric evidentiary standard possible: the deeper library is female, so
+  # a female-high result is the direction the confound already predicts.
+  deeper_library: female
+  # Inference does not come from this pipeline. It comes from these.
+  orthogonal_assays: [NETs, ROS, phagocytosis, glucose uptake,
+                      mitochondrial content, CBC]
+
+# ---------------------------------------------------------------------------
 # Compute
 #
 # Seurat farms SCTransform and several other steps out through the `future`
@@ -93,9 +129,86 @@ qc:
   mito_pattern: "^mt-"
   ribo_pattern: "^Rp[sl]"
   hb_pattern: "^(Hba|Hbb)"
-  min_log10_genes_per_umi: 0.8
+  # Thresholds are computed PER LIBRARY by median absolute deviation, not
+  # applied globally. A global nFeature/nCount cutoff preferentially deletes
+  # the lowest-RNA cells in the compartment -- mature neutrophils -- and the
+  # shallower library loses more of them, which manufactures a composition
+  # difference between the sexes out of a depth difference.
+  method: mad
+  mad_nmads: 3
+  # Applied on top of the MAD filter, since these are biological rather than
+  # depth-driven.
   max_mito_ratio: 0.2
   max_percent_hb: 10
+  # Kept for method: fixed, and for the retention comparison.
+  min_log10_genes_per_umi: 0.8
+
+# ---------------------------------------------------------------------------
+# Depth matching
+#
+# The libraries differ several-fold in capture per cell, so this is the primary
+# analysis path rather than a sensitivity check: a differential result computed
+# on unmatched depth is not interpretable.
+# ---------------------------------------------------------------------------
+depth:
+  match: true
+  # "median" downsamples every cell toward the lower group median.
+  target: median
+  # Controls run alongside the real comparison. Each answers a different
+  # question about whether the effect is real.
+  controls:
+    # Does the result survive matching the deeper library down?
+    cross_sex_downsample: true
+    # Does downsampling ALONE create the effect, within one library?
+    within_sex_null_downsample: true
+    # Is it a power artefact rather than a depth artefact?
+    match_cell_numbers: true
+
+# ---------------------------------------------------------------------------
+# Within-library empirical null
+#
+# With replication permanently unavailable this is the only quantitative
+# statement the pipeline can make about whether a signal exceeds what this data
+# produces by chance. It is a false-positive floor, not a significance test:
+# a random cell split samples across the pooled animals, so it captures
+# cell-level sampling plus some between-animal variation, but it remains
+# anticonservative relative to a true between-animal null, which cannot be
+# constructed here.
+# ---------------------------------------------------------------------------
+null_model:
+  n_splits: 200
+  # Which library to build the null in. "deeper" uses the one with more depth,
+  # which is the conservative choice.
+  library: deeper
+  # Splits are matched to the real contrast on these, so the null answers the
+  # same question the comparison does.
+  match_on: [stage, n_cells]
+  # The floor is this quantile of the null distribution.
+  quantile: 0.95
+
+# ---------------------------------------------------------------------------
+# Blocking gates
+#
+# Checked before the analyses that depend on them, and fatal by default. Each
+# one corresponds to a way this dataset has already been observed to mislead.
+# ---------------------------------------------------------------------------
+gates:
+  # No stratum smaller than this produces output at all. Strata of 6 to 17
+  # cells were previously generating gene lists.
+  min_cells_per_stratum: 50
+  # Sex chromosome genes must appear near the top of a male-vs-female contrast.
+  # If they do not, the contrast is not measuring sex. Check first whether the
+  # probe set targets them at all -- absence from the panel is a documented
+  # limitation, absence despite being targeted is a broken comparison.
+  sex_chromosome_genes: [Xist, Ddx3y, Uty, Kdm5d, Eif2s3y]
+  sex_gene_expected_in_top: 50
+  # Median depth ratio between any two compared groups.
+  max_depth_ratio: 1.3
+  # ADT isotype controls must not come out significant.
+  isotypes_must_be_null: true
+  # false downgrades every gate to a warning. Use only to inspect a failing
+  # run; results produced this way are not reportable.
+  fatal: true
 
 clustering:
   # 4 = Leiden (needs the Python leidenalg package via reticulate);
@@ -112,24 +225,62 @@ annotation:
   cytotrace_species: mouse
 
 analysis:
-  # 9m was dropped from every cross-age comparison in the original analysis:
-  # it is not present in all cell-type strata.
-  age_levels: [3m, 12m, 18m]
-  all_age_levels: [3m, 9m, 12m, 18m]
+  # All four timepoints are kept. Dropping 9m globally because some strata are
+  # unpopulated costs a third of the age resolution to fix a local problem;
+  # gates.min_cells_per_stratum drops the individual strata instead.
+  age_levels: [3m, 9m, 12m, 18m]
+  # Months, for modelling age as a continuous covariate rather than an ordered
+  # factor. Keyed by the labels above.
+  age_months: {3m: 3, 9m: 9, 12m: 12, 18m: 18}
   sex_levels: [female, male]
-  # Clusters of the merged GMP+neutrophil object -> developmental stage.
-  # Re-check these against the cluster plot if the merge is ever re-run:
-  # cluster numbering is not stable across Seurat versions.
-  neutrophil_cluster_labels:
-    "0": proNeu
-    "1": immature
-    "2": proNeu2
-    "3": mature
-    "4": preNeu
-    "5": GMPs
-    "6": proNeu
-    "7": mature
   stage_levels: [GMPs, proNeu, proNeu2, preNeu, immature, mature]
+
+# ---------------------------------------------------------------------------
+# Stage assignment
+#
+# Depth must not decide both the stratification and the result. Assigning stage
+# from RNA clusters and then testing RNA differences within those strata puts
+# the confound inside the stratification, so stage comes from surface protein
+# instead: the ADT layer is CLR-normalised per cell and its isotype controls
+# are non-significant at every age, which makes it the depth-robust modality.
+#
+# method:
+#   adt      - score ADT marker panels per cell, assign by highest score
+#   markers  - rank-based UCell scoring of RNA signatures (depth-robust, but
+#              still RNA)
+#   clusters - the old cluster-id mapping, kept only for the comparison
+# ---------------------------------------------------------------------------
+stage_assignment:
+  method: adt
+  # Reported as a confusion matrix against `method`, because a substantial
+  # disagreement is itself a result.
+  compare_against: clusters
+  # Surface markers per stage. Names must match rownames of the ADT assay;
+  # adt_marker_aliases below maps panel names onto these.
+  adt_panels:
+    GMPs:     {high: [Ms.CD117], low: [Ms.Ly.6G, Ms.CD11b]}
+    proNeu:   {high: [Ms.CD117, Ms.CD11b], low: [Ms.Ly.6G]}
+    proNeu2:  {high: [Ms.CD11b], low: [Ms.Ly.6G, Ms.CD101]}
+    preNeu:   {high: [Ms.Ly.6G, Ms.CD11b], low: [Ms.CD101, Ms.CXCR2]}
+    immature: {high: [Ms.Ly.6G, Ms.CD101], low: [Ms.CXCR2]}
+    mature:   {high: [Ms.Ly.6G, Ms.CD101, Ms.CXCR2, Ms.CD177], low: []}
+  # Panel naming varies by vendor; each entry maps a canonical name to the
+  # patterns to look for in the ADT rownames.
+  adt_marker_aliases:
+    Ms.Ly.6G:  ["Ly.?6G", "Ly6G"]
+    Ms.CXCR2:  ["CXCR2", "CD182"]
+    Ms.CD101:  ["CD101"]
+    Ms.CD177:  ["CD177"]
+    Ms.CD117:  ["CD117", "cKit", "c.Kit"]
+    Ms.CD11b:  ["CD11b", "ITGAM"]
+  # RNA signatures for method: markers, and for scoring regardless of method.
+  rna_signatures:
+    GMPs:     [Elane, Mpo, Prtn3, Ctsg, Ms4a3, Kit, Cd34]
+    proNeu:   [Elane, Mpo, Prtn3, Ctsg, Cebpe, Gfi1, Fcnb]
+    proNeu2:  [Il5ra, Cebpe, Fcnb, Ltf, Camp, Mki67]
+    preNeu:   [Ltf, Camp, Ngp, Lcn2, Chil3, Fcnb, Mki67]
+    immature: [Ltf, Camp, Lcn2, Mmp8, Cd177, Ifitm1, Chil3]
+    mature:   [Cxcr2, Sell, Il1b, Csf3r, Mmp9, S100a8, S100a9, Retnlg, Fpr1]
 
 age_trend:
   rho_cutoff: 0.1

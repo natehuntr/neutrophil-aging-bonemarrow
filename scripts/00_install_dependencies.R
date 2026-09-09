@@ -76,6 +76,9 @@ archived <- list(
 
 bioc <- c(
   "scDblFinder", "glmGamPoi", "SingleR", "celldex", "dittoSeq",
+  # per-library MAD QC (scuttle), binomial thinning (DropletUtils),
+  # rank-based module scoring (UCell)
+  "scuttle", "DropletUtils", "UCell",
   "SingleCellExperiment", "SummarizedExperiment", "fgsea", "tradeSeq",
   "clusterProfiler", "org.Mm.eg.db", "EnsDb.Mmusculus.v79", "batchelor"
 )

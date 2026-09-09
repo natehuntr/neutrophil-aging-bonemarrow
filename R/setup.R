@@ -84,6 +84,7 @@ configure_compute <- function(cfg, quiet = FALSE) {
 #' individual modules can be sourced on their own during development.
 load_modules <- function(modules = c("io", "preprocess", "dimred", "annotate",
                                      "composition", "trajectory", "de", "gsea",
+                                     "evidence", "depth", "nullmodel", "gates",
                                      "plots")) {
   for (m in modules) source(project_path("R", paste0(m, ".R")))
   invisible(modules)
