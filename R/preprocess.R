@@ -123,29 +123,118 @@ add_doublet_calls <- function(obj) {
   obj
 }
 
-#' Apply the QC thresholds from the config.
+#' Apply QC thresholds, computed per library.
 #'
-#' Cells whose hashtag call was Doublet or Negative have no age and are
-#' dropped here along with the QC failures.
-filter_cells <- function(obj, cfg, hashtags) {
-  qc <- cfg$qc
+#' A global nFeature/nCount cutoff is the wrong instrument here. Mature
+#' neutrophils carry the least RNA in this compartment, so a fixed threshold
+#' removes them preferentially -- and it removes more of them from the
+#' shallower library. That converts a depth difference between the sexes into
+#' an apparent composition difference, which is the most likely explanation for
+#' a progenitor-skewed male sample.
+#'
+#' scuttle's MAD approach sets the threshold from each library's own
+#' distribution, so "outlier" means outlying for that library rather than
+#' relative to the deeper one.
+filter_cells <- function(obj, cfg, hashtags, batch_col = "sex") {
   require_metadata(obj, c("age", "MULTI_ID", "scDblFinder.class",
                           "log10GenesPerUMI", "mitoRatio", "percent.hb"),
                    context = "QC filtering")
-
   n_before <- ncol(obj)
-  # NA counts as a failure inside select_cells(), which also covers the cell
-  # with a single UMI whose log10GenesPerUMI is Inf/NaN.
+
+  # Demultiplexing and doublets first: these are not depth-driven, and the MAD
+  # thresholds should be computed on real single cells.
   obj <- select_cells(obj, list(
     "hashtag call is a real sample" = obj$MULTI_ID %in% hashtags,
     "age was assigned"              = !is.na(obj$age),
-    "singlet"                       = obj$scDblFinder.class == "singlet",
-    "log10GenesPerUMI above cutoff" = obj$log10GenesPerUMI > qc$min_log10_genes_per_umi,
-    "mitoRatio below cutoff"        = obj$mitoRatio < qc$max_mito_ratio,
-    "percent.hb below cutoff"       = obj$percent.hb < qc$max_percent_hb
-  ), context = "QC filtering")
+    "singlet"                       = obj$scDblFinder.class == "singlet"
+  ), context = "demultiplexing and doublets")
+
+  discard <- if (identical(cfg$qc$method, "mad")) {
+    mad_outliers(obj, cfg, batch_col)
+  } else {
+    log_step("  QC method 'fixed': global thresholds (see qc.method in the config)")
+    !(obj$log10GenesPerUMI > cfg$qc$min_log10_genes_per_umi)
+  }
+
+  obj <- select_cells(obj, list(
+    "not a per-library count/feature outlier" = !discard,
+    "mitoRatio below cutoff"  = obj$mitoRatio < cfg$qc$max_mito_ratio,
+    "percent.hb below cutoff" = obj$percent.hb < cfg$qc$max_percent_hb
+  ), context = "QC thresholds")
 
   log_step(sprintf("cell filtering: %d -> %d cells retained (%.1f%% kept)",
                    n_before, ncol(obj), ncol(obj) / n_before * 100))
   obj
+}
+
+#' Per-library median-absolute-deviation outlier calls.
+#'
+#' `batch` is what makes this per-library: scuttle computes the thresholds
+#' separately within each batch, so a shallower library is judged against
+#' itself.
+mad_outliers <- function(obj, cfg, batch_col = "sex") {
+  require_packages("scuttle", "SingleCellExperiment")
+
+  counts <- Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")
+  sce <- SingleCellExperiment::SingleCellExperiment(list(counts = counts))
+  qc <- scuttle::perCellQCMetrics(sce)
+
+  batch <- if (batch_col %in% colnames(obj@meta.data))
+    as.character(obj[[batch_col]][, 1]) else NULL
+  if (is.null(batch))
+    log_step("  no ", batch_col, " column; MAD thresholds computed on all cells at once")
+
+  filters <- scuttle::perCellQCFilters(qc, batch = batch, nmads = cfg$qc$mad_nmads)
+  discard <- filters$discard
+
+  # Report the thresholds actually used, per library. If they differ a lot
+  # between the sexes, that difference IS the confound, made visible.
+  for (b in unique(batch %||% "all")) {
+    idx <- if (is.null(batch)) rep(TRUE, ncol(obj)) else batch == b
+    log_step(sprintf("  %s: %d of %d cells discarded (%.1f%%); sum >= %.0f, detected >= %.0f",
+                     b, sum(discard[idx]), sum(idx), 100 * mean(discard[idx]),
+                     min(qc$sum[idx & !discard]), min(qc$detected[idx & !discard])))
+  }
+  discard
+}
+
+#' Retained-cell fraction by group, before and after filtering.
+#'
+#' The table that decides whether a composition finding survives interpretation.
+#' If the shallower library loses disproportionately many of one stage, the
+#' composition difference is a QC artefact and this is the number that shows it.
+retention_table <- function(before, after, group_cols = c("sex", "stage")) {
+  present <- intersect(group_cols, intersect(colnames(before@meta.data),
+                                             colnames(after@meta.data)))
+  if (!length(present)) stop("none of ", paste(group_cols, collapse = ", "), " are present")
+
+  tabulate_by <- function(obj) {
+    keys <- lapply(present, function(col) as.character(obj[[col]][, 1]))
+    names(keys) <- present
+    as.data.frame(do.call(table, keys), responseName = "n", stringsAsFactors = FALSE)
+  }
+
+  n_before <- tabulate_by(before)
+  n_after <- tabulate_by(after)
+  names(n_before)[names(n_before) == "n"] <- "n_before"
+  names(n_after)[names(n_after) == "n"] <- "n_after"
+
+  out <- merge(n_before, n_after, by = present, all = TRUE)
+  out$n_before[is.na(out$n_before)] <- 0
+  out$n_after[is.na(out$n_after)] <- 0
+  out$retained_fraction <- ifelse(out$n_before > 0, out$n_after / out$n_before, NA_real_)
+  out[order(out[[present[1]]], -out$n_before), ]
+}
+
+#' Does retention differ enough between libraries to explain a composition
+#' difference on its own?
+retention_asymmetry <- function(retention, sex_col = "sex", stage_col = "stage") {
+  if (!all(c(sex_col, stage_col) %in% names(retention))) return(NULL)
+  wide <- stats::reshape(retention[, c(sex_col, stage_col, "retained_fraction")],
+                         idvar = stage_col, timevar = sex_col, direction = "wide")
+  names(wide) <- sub("^retained_fraction\\.", "retained_", names(wide))
+  fractions <- wide[, setdiff(names(wide), stage_col), drop = FALSE]
+  wide$retention_ratio <- apply(fractions, 1, function(x)
+    if (any(is.na(x)) || min(x) == 0) NA_real_ else max(x) / min(x))
+  wide[order(-wide$retention_ratio), ]
 }
