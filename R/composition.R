@@ -24,7 +24,7 @@
 #' Proportions are within-group (they sum to 1 over stages for each age x sex),
 #' which is what makes them comparable when group sizes differ several-fold.
 stage_composition <- function(obj, cfg,
-                              stage_col = "fine_neu_labels",
+                              stage_col = "stage",
                               age_col = "age",
                               sex_col = "sex",
                               age_levels = cfg$analysis$age_levels) {

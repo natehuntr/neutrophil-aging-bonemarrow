@@ -121,10 +121,16 @@ gmp_neu <- Seurat::FindNeighbors(gmp_neu, dims = seq_len(cfg$samples[[1]]$dims$r
                                  verbose = FALSE)
 gmp_neu <- Seurat::FindClusters(gmp_neu, resolution = cfg$clustering$chosen_resolution,
                                 verbose = FALSE)
+# Stage comes from surface protein by default (stage_assignment.method), which
+# keeps depth out of the stratification. The comparison against the old
+# cluster-id mapping is computed too: substantial disagreement is a result.
 gmp_neu <- add_stage_labels(gmp_neu, cfg)
+confusion <- stage_confusion(gmp_neu, "stage", "stage_clusters")
+if (!is.null(confusion))
+  write_table(as.data.frame(confusion$table), cfg, "stage_assignment_confusion.csv")
 
 log_step("cells per stage:")
-print(table(gmp_neu$fine_neu_labels, gmp_neu$sex, useNA = "ifany"))
+print(table(gmp_neu$stage, gmp_neu$sex, useNA = "ifany"))
 
 # The stage assignment is a manual mapping from cluster ids: these plots are
 # how it gets checked, so they are always written.
@@ -132,7 +138,7 @@ module_plots <- lapply(paste0(names(NEUTROPHIL_MODULES), "_score"), function(m)
   Seurat::FeaturePlot(gmp_neu, reduction = "umap", features = m))
 save_figure(patchwork::wrap_plots(module_plots), cfg, "gmp_neutrophil_modules.pdf")
 save_figure(Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "seurat_clusters") +
-              Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "fine_neu_labels"),
+              Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "stage"),
             cfg, "gmp_neutrophil_clusters.pdf", width = 12, height = 5)
 
 save_object(gmp_neu, cfg, "gmp_neutrophils.rds")

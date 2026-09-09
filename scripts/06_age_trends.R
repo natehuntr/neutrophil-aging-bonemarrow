@@ -27,7 +27,7 @@ load_modules()
 age_levels <- cfg$analysis$age_levels
 sexes <- cfg$analysis$sex_levels
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
-require_metadata(gmp_neu, c("fine_neu_labels", "age", "sex"), context = "step 6")
+require_metadata(gmp_neu, c("stage", "age", "sex"), context = "step 6")
 
 # --- pseudobulk overview ---------------------------------------------------
 save_figure(plot_pseudobulk_pca_grid(gmp_neu, cfg), cfg,
@@ -36,12 +36,16 @@ save_figure(plot_pseudobulk_pca_grid(gmp_neu, cfg), cfg,
 #' One stage, one sex: re-normalised so variable features and scaling reflect
 #' that stratum rather than the whole object.
 stage_subset <- function(obj, stage, sex) {
-  keep <- as.character(obj$fine_neu_labels) == stage &
+  keep <- as.character(obj$stage) == stage &
     obj$sex == sex &
     obj$age %in% age_levels
   keep <- !is.na(keep) & keep
   cells <- colnames(obj)[keep]
-  if (length(cells) < 30) return(NULL)
+
+  # The gate, not a local threshold: a stratum below it does not produce a
+  # smaller result, it produces a meaningless one.
+  if (!stratum_is_usable(table(as.character(obj$age[keep])),
+                         paste(stage, sex, sep = "/"), cfg)) return(NULL)
 
   sub <- subset(obj, cells = cells)
   Seurat::DefaultAssay(sub) <- "RNA"
@@ -52,6 +56,7 @@ stage_subset <- function(obj, stage, sex) {
 
 # --- A. Spearman age trends and shape clusters ----------------------------
 trend_results <- list()
+excess <- list()
 
 for (stage in cfg$analysis$stage_levels) {
   for (sex in sexes) {
@@ -62,12 +67,28 @@ for (stage in cfg$analysis$stage_levels) {
     }
     log_step("=== age trends: ", stage, " / ", sex, " ===")
 
-    res <- age_trend_clusters(sub, cfg, plot = FALSE)
+    # Excess over a permutation null rather than a bare |rho| cutoff: a fixed
+    # threshold has no null and is n-dependent, so its gene count mostly
+    # reports how many cells the stratum had.
+    res <- age_trend_excess(sub, cfg, label = paste(stage, sex, sep = "/"))
+    if (is.null(res)) next
     trend_results[[paste(stage, sex, sep = "_")]] <- res
 
-    write_table(age_trend_table(res), cfg,
+    write_table(strip_inferential_columns(res$changing_genes), cfg,
                 sprintf("age_trend_%s_%s.csv", stage, sex))
+    excess[[paste(stage, sex, sep = "_")]] <- data.frame(
+      stage = stage, sex = sex,
+      n_cells_min = min(res$n_cells),
+      null_threshold = res$null_threshold,
+      n_exceeding_null = res$n_exceeding)
   }
+}
+
+if (length(excess)) {
+  summary_tbl <- do.call(rbind, excess)
+  write_table(summary_tbl, cfg, "age_trend_excess_over_null.csv")
+  log_step("genes exceeding the permutation null, by stratum:")
+  print(summary_tbl, row.names = FALSE)
 }
 
 # --- B. Permutation-calibrated pairwise DE --------------------------------

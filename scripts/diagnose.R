@@ -28,7 +28,7 @@ REQUIREMENTS <- list(
                              "CytoTRACE2_Potency", "CytoTRACE2_Score"),
   "bm_merged.rds"        = c("age", "sex", "singleR_main_label",
                              "CytoTRACE2_Potency"),
-  "gmp_neutrophils.rds"  = c("age", "sex", "fine_neu_labels",
+  "gmp_neutrophils.rds"  = c("age", "sex", "stage",
                              "CytoTRACE2_Potency", "seurat_clusters")
 )
 
@@ -55,7 +55,7 @@ describe <- function(name, required) {
     cat("!! empty or absent: ", paste(broken$column, collapse = ", "),
         "\n   Any step selecting on these will find no cells.\n", sep = "")
 
-  for (col in c("age", "sex", "fine_neu_labels", "CytoTRACE2_Potency",
+  for (col in c("age", "sex", "stage", "CytoTRACE2_Potency",
                 "singleR_main_label")) {
     if (!col %in% colnames(obj@meta.data)) next
     values <- obj@meta.data[[col]]

@@ -40,7 +40,7 @@ learn_trajectory <- function(cds,
                              ncenter = 300,
                              minimal_branch_len = NULL,
                              root_group = NULL,
-                             root_group_col = "fine_neu_labels") {
+                             root_group_col = "stage") {
   control <- list(prune_graph = TRUE)
   if (!is.null(ncenter)) control$ncenter <- ncenter
   if (!is.null(minimal_branch_len)) control$minimal_branch_len <- minimal_branch_len
@@ -94,7 +94,7 @@ pseudotime_spearman <- function(cds) {
 #'   analyse (e.g. one per age).
 trajectory_by_group <- function(obj, cfg, group_cells, prefix,
                                 root_group = "GMPs",
-                                root_group_col = "fine_neu_labels",
+                                root_group_col = "stage",
                                 use_partition = FALSE,
                                 ncenter = 300,
                                 minimal_branch_len = 10,

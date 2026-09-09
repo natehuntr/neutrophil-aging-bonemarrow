@@ -38,22 +38,19 @@ args <- commandArgs(trailingOnly = TRUE)
 stages <- if (length(args)) args else cfg$gsea$stages
 
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
-require_metadata(gmp_neu, c("fine_neu_labels", "age", "sex"), context = "step 8")
+require_metadata(gmp_neu, c("stage", "age", "sex"), context = "step 8")
 
 for (stage in stages) {
   log_step("=================== ", stage, " ===================")
 
   neus <- select_cells(gmp_neu, list(
-    "fine_neu_labels is this stage"     = as.character(gmp_neu$fine_neu_labels) == stage,
+    "stage is this stage"     = as.character(gmp_neu$stage) == stage,
     "age is one of analysis.age_levels" = gmp_neu$age %in% age_levels
   ), context = paste(stage, "neutrophils"))
 
   group_sizes <- table(neus$sex, neus$age)
   print(group_sizes)
-  if (any(dim(group_sizes) < c(2, length(age_levels))) || any(group_sizes < 20)) {
-    log_step("skipping ", stage, ": every sex x age group needs at least 20 cells")
-    next
-  }
+  if (!stratum_is_usable(as.vector(group_sizes), stage, cfg)) next
 
   neus <- join_layers(neus)
   Seurat::DefaultAssay(neus) <- "RNA"
@@ -72,7 +69,12 @@ for (stage in stages) {
   # --- 2. Preranked GSEA --------------------------------------------------
   pathways <- gobp_pathways(rank_tbl$gene, cfg)
   gsea <- run_interaction_gsea(rank_tbl, pathways, cfg)
-  write_table(gsea$result, cfg, sprintf("gsea_sex_by_age_GOBP_%s.csv", stage))
+  # The confound has a direction, so a pathway pointing with it and one
+  # pointing against it are not equally believable.
+  annotated <- annotate_bias(gsea$result, gsea$result$trajectory_more_positive_in, cfg)
+  annotated$orthogonal_assay <- suggest_orthogonal_assay(annotated$pathway)
+  write_table(strip_inferential_columns(annotated, keep = "padj"), cfg,
+              sprintf("gsea_sex_by_age_GOBP_%s.csv", stage))
 
   reportable <- gsea$result[which(gsea$result$padj < 0.05 & gsea$result$independent), ]
   log_step(nrow(reportable), " independent pathways at padj < 0.05")

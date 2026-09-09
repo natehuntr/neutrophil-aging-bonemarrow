@@ -37,7 +37,7 @@ plot_elbows <- function(obj, reductions = c("pca", "sct_pca", "adt_pca"), ndims 
 #' Returns NULL (with a message) when a stratum has too few groups for a PCA
 #' to mean anything, so it can be mapped over every stratum without erroring.
 plot_pseudobulk_pca <- function(obj, cfg, label = NULL,
-                                stratum_col = "fine_neu_labels",
+                                stratum_col = "stage",
                                 group_col = "age_sex",
                                 n_top_genes = 2000,
                                 age_levels = cfg$analysis$age_levels) {
@@ -91,7 +91,7 @@ plot_pseudobulk_pca <- function(obj, cfg, label = NULL,
 }
 
 #' One pseudobulk PCA per developmental stage, laid out together.
-plot_pseudobulk_pca_grid <- function(obj, cfg, stratum_col = "fine_neu_labels") {
+plot_pseudobulk_pca_grid <- function(obj, cfg, stratum_col = "stage") {
   labels <- cfg$analysis$stage_levels
   plots <- lapply(labels, function(l) plot_pseudobulk_pca(obj, cfg, l, stratum_col))
   names(plots) <- labels
