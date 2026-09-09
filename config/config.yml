@@ -119,6 +119,22 @@ samples:
       wnn_rna: 5
       wnn_adt: 10
 
+# ---------------------------------------------------------------------------
+# Ambient RNA correction
+#
+# Reinstated deliberately, having been removed earlier in this project. The
+# reason is specific to this dataset: contamination scales with library depth,
+# so it is not independent of the sex confound, and the transcripts that bleed
+# most between droplets are the highly expressed ones -- here the granule genes
+# that carry the maturation signal and top every differential list.
+#
+# method: soupx | none
+# ---------------------------------------------------------------------------
+ambient:
+  method: soupx
+  quick_cluster_dims: 30
+  quick_cluster_resolution: 0.5
+
 adt:
   isotype_pattern: "^Isotype"
   # Antibodies whose signal is dominated by a bimodal background; listed for

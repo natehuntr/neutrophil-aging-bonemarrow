@@ -60,7 +60,7 @@ cran <- c(
   "yaml", "here", "dplyr", "tidyr", "tibble", "purrr", "readr", "glue",
   "ggplot2", "patchwork", "pheatmap", "matrixStats", "Matrix", "scales",
   "Seurat", "SeuratObject", "R.utils", "ggVennDiagram", "clustree",
-  "msigdbr", "remotes", "BiocManager",
+  "msigdbr", "remotes", "BiocManager", "SoupX",
   # monocle3's dependencies, installed here rather than left to it, so the
   # API-free route below has everything it needs already present. sf and
   # spdep need GDAL/GEOS/PROJ; units needs UDUNITS. See slurm/env.local.sh.

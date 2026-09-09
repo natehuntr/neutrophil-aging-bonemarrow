@@ -21,7 +21,8 @@ load_modules()
 # SummarizedExperiment and SingleCellExperiment must be ATTACHED, not just
 # installed: scDblFinder relies on S4 generics resolved through the search
 # path. See the note in R/packages.R.
-require_packages("scDblFinder", "SingleCellExperiment", "SummarizedExperiment")
+require_packages("scDblFinder", "SingleCellExperiment", "SummarizedExperiment",
+                 "scuttle")
 
 args <- commandArgs(trailingOnly = TRUE)
 sample_keys <- if (length(args)) args else names(cfg$samples)
@@ -30,9 +31,10 @@ for (key in sample_keys) {
   sample_cfg <- sample_config(cfg, key)
   log_step("=== preprocessing ", key, " (", sample_cfg$sample_id, ") ===")
 
-  mats <- read_cite_sample(cfg, sample_cfg$sample_id)
+  needs_raw <- !identical(cfg$ambient$method %||% "none", "none")
+  mats <- read_cite_sample(cfg, sample_cfg$sample_id, need_raw = needs_raw)
 
-  obj <- create_rna_object(mats)
+  obj <- create_rna_object(mats, cfg)
   obj <- add_protein_assays(obj, mats, cfg, hashtags = names(sample_cfg$hashtags))
   obj <- demultiplex_hashtags(obj, sample_cfg)
   obj <- add_qc_metrics(obj, cfg)

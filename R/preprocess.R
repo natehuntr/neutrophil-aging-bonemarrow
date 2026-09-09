@@ -3,9 +3,79 @@
 # metrics, doublet calls and filtering.
 # ---------------------------------------------------------------------------
 
-#' Build the RNA Seurat object for a sample.
-create_rna_object <- function(mats) {
-  Seurat::CreateSeuratObject(counts = mats$gex, project = mats$sample_id)
+# ---------------------------------------------------------------------------
+# Ambient RNA correction.
+#
+# Reinstated after being removed earlier in this project's history. The
+# argument for it here is specific rather than general: ambient contamination
+# scales with library depth, so it is NOT independent of the sex confound, and
+# the transcripts that bleed most between droplets are the highly expressed
+# ones -- which in this compartment are exactly the granule genes that carry
+# the maturation signal and top every differential list (S100a8/9, Retnlg,
+# Mmp8/9, Camp, Ngp, Ltf).
+#
+# Correct first, then re-check whether the granule signal survives.
+# ---------------------------------------------------------------------------
+
+#' Estimate and remove ambient RNA with SoupX.
+#'
+#' SoupX needs a clustering to estimate contamination, so a throwaway object is
+#' clustered here purely to supply one.
+run_soupx <- function(mats, cfg) {
+  require_packages("SoupX")
+  if (is.null(mats$raw_gex))
+    stop("ambient correction needs the raw matrix; read the sample with need_raw = TRUE")
+
+  sc <- SoupX::SoupChannel(tod = mats$raw_gex, toc = mats$gex,
+                           channelName = mats$sample_id)
+
+  quick <- Seurat::CreateSeuratObject(counts = mats$gex)
+  quick <- Seurat::NormalizeData(quick, verbose = FALSE)
+  quick <- Seurat::FindVariableFeatures(quick, verbose = FALSE)
+  quick <- Seurat::ScaleData(quick, verbose = FALSE)
+  quick <- Seurat::RunPCA(quick, npcs = cfg$ambient$quick_cluster_dims, verbose = FALSE)
+  quick <- Seurat::FindNeighbors(quick, dims = seq_len(cfg$ambient$quick_cluster_dims),
+                                 verbose = FALSE)
+  quick <- Seurat::FindClusters(quick, resolution = cfg$ambient$quick_cluster_resolution,
+                                verbose = FALSE)
+
+  sc <- SoupX::setClusters(sc, stats::setNames(as.character(quick$seurat_clusters),
+                                               colnames(quick)))
+  sc <- SoupX::autoEstCont(sc)
+
+  rho <- sc$fit$rhoEst
+  log_step(sprintf("  SoupX contamination estimate: %.1f%% of counts are ambient",
+                   100 * rho))
+  top <- utils::head(sc$soupProfile[order(-sc$soupProfile$est), ], 20)
+  log_step("  top ambient genes: ", paste(utils::head(rownames(top), 10), collapse = ", "))
+
+  list(counts = SoupX::adjustCounts(sc, roundToInt = TRUE),
+       rho = rho, top_genes = top)
+}
+
+#' Build the RNA Seurat object, ambient-corrected unless switched off.
+#'
+#' The contamination fraction is recorded on the object: it is per library, so
+#' a difference between the sexes is another face of the depth confound and
+#' belongs in the diagnostics rather than being discarded.
+create_rna_object <- function(mats, cfg) {
+  method <- cfg$ambient$method %||% "none"
+
+  if (identical(method, "none")) {
+    log_step("  ambient correction: off (ambient.method)")
+    obj <- Seurat::CreateSeuratObject(counts = mats$gex, project = mats$sample_id)
+    obj$ambient_rho <- NA_real_
+    return(obj)
+  }
+
+  soup <- switch(method,
+    soupx = run_soupx(mats, cfg),
+    stop("unknown ambient.method: ", method))
+
+  obj <- Seurat::CreateSeuratObject(counts = soup$counts, project = mats$sample_id)
+  obj$ambient_rho <- soup$rho
+  attr(obj, "ambient_top_genes") <- soup$top_genes
+  obj
 }
 
 #' Isotype-centred ADT normalisation.

@@ -37,10 +37,16 @@ name says what is in it.
 
 1. **SoupX was computed and discarded.** `soup_male_bm` was built from the
    corrected counts, but the object carried forward (`male_bm`) was built from
-   the uncorrected `filtered_gex`, so the correction reached nothing. Ambient
-   correction has since been removed from the pipeline entirely, which makes
-   the original behaviour the actual behaviour. The raw (empty-droplet) matrix
-   is no longer read at all, since SoupX was its only consumer.
+   the uncorrected `filtered_gex`, so the correction reached nothing.
+
+   This went through two further changes. It was removed entirely at the user's
+   request, and has since been **reinstated** as `ambient.method: soupx` on a
+   specific argument: contamination scales with library depth, so it is not
+   independent of the sex confound, and the transcripts that bleed most between
+   droplets are the highly expressed ones -- here the granule genes that carry
+   the maturation signal and top every differential list. The estimated
+   contamination fraction is now recorded per library, since a difference
+   between the sexes is another face of the same confound.
 
 2. **`main_label_score` was a matrix.** `obj$main_label_score <-
    cell_identity$scores` assigns a cells-x-labels matrix into a metadata column.
