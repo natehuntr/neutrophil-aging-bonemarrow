@@ -79,9 +79,14 @@ bioc <- c(
   # per-library MAD QC (scuttle), binomial thinning (DropletUtils),
   # rank-based module scoring (UCell)
   "scuttle", "DropletUtils", "UCell",
-  "SingleCellExperiment", "SummarizedExperiment", "fgsea", "tradeSeq",
-  "clusterProfiler", "org.Mm.eg.db", "EnsDb.Mmusculus.v79", "batchelor"
+  "SingleCellExperiment", "SummarizedExperiment", "fgsea", "tradeSeq"
 )
+# Deliberately absent: clusterProfiler, org.Mm.eg.db, EnsDb.Mmusculus.v79 and
+# batchelor. They came from the original notebook and nothing in R/ or scripts/
+# calls them -- gene set testing goes through fgsea + msigdbr. clusterProfiler
+# in particular drags in the treeio/ggtree/enrichplot chain, which does not
+# build against Bioconductor 3.18 on this toolchain, so requiring it would fail
+# the install for no gain.
 
 #' Install only what is absent, and report what was attempted.
 install_missing <- function(pkgs, installer, label) {
@@ -289,8 +294,6 @@ needed_by <- list(
   "celldex"              = "2",
   "CytoTRACE2"           = "2",
   "clustree"             = "2",
-  "clusterProfiler"      = "4",
-  "org.Mm.eg.db"         = "4",
   "monocle3"             = "5, 7, 9",
   # step 5 is complete once combined_cds.rds exists, so this only matters if
   # the trajectory is rebuilt from scratch
