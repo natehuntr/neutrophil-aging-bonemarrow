@@ -80,6 +80,26 @@ configure_compute <- function(cfg, quiet = FALSE) {
   invisible(cfg)
 }
 
+#' How many cores this process may actually use.
+#'
+#' parallel::detectCores() reports the MACHINE's cores, not the allocation.
+#' On a shared cluster node that is 256 against a 4-core cgroup, and packages
+#' that fork detectCores() workers oversubscribe the allocation badly enough
+#' that the workers die -- returning try-error objects that surface much later
+#' as a type error deep inside the package. SLURM_CPUS_PER_TASK is the honest
+#' number when it is set.
+allocated_cores <- function(cfg = NULL) {
+  explicit <- cfg$compute$cores
+  if (!is.null(explicit)) return(max(1L, as.integer(explicit)))
+
+  slurm <- Sys.getenv("SLURM_CPUS_PER_TASK")
+  if (nzchar(slurm)) return(max(1L, as.integer(slurm)))
+
+  if (requireNamespace("parallel", quietly = TRUE))
+    return(max(1L, parallel::detectCores()))
+  1L
+}
+
 #' Source every analysis module. Kept separate from init_project() so that
 #' individual modules can be sourced on their own during development.
 load_modules <- function(modules = c("io", "preprocess", "dimred", "annotate",

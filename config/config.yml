@@ -75,6 +75,11 @@ design:
 # sample trips it again.
 compute:
   globals_max_size_gb: 8
+  # Cores available to packages that fork their own workers (CytoTRACE2).
+  # Leave unset and SLURM_CPUS_PER_TASK is used, which is the allocation
+  # rather than the machine -- parallel::detectCores() reports the node's
+  # 256 cores against a 4-core cgroup and the oversubscribed forks die.
+  # cores: 4
   # "sequential" runs in this process. Parallel plans copy those same large
   # globals into every worker, so multisession on a laptop is usually slower
   # and much heavier; change this only with the memory headroom to match.

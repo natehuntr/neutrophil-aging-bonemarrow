@@ -111,8 +111,26 @@ CYTOTRACE_POTENCY_LEVELS <- c("Differentiated", "Unipotent", "Oligopotent",
 #' quietly and the problem only surfaces two steps later as an empty subset.
 run_cytotrace2 <- function(obj, cfg, assay = "RNA") {
   expr <- as.matrix(Seurat::GetAssayData(obj, assay = assay, layer = "counts"))
-  result <- CytoTRACE2::cytotrace2(expr, is_seurat = FALSE,
-                                   species = cfg$annotation$cytotrace_species)
+  cores <- allocated_cores(cfg)
+  log_step("CytoTRACE2 on ", ncol(expr), " cells using ", cores, " core(s)")
+
+  # cytotrace2() forks detectCores() workers when ncores is left NULL, which on
+  # a cluster node means ~128 forks inside a 4-core cgroup. The forks die, and
+  # mclapply() substitutes try-error objects for their results, so the score
+  # column comes back character and the package fails several calls later with
+  # "'x' must be numeric" out of cut(). Capping ncores at the allocation is the
+  # fix; serial is the fallback if it still trips.
+  result <- tryCatch(
+    CytoTRACE2::cytotrace2(expr, is_seurat = FALSE,
+                           species = cfg$annotation$cytotrace_species,
+                           ncores = cores),
+    error = function(e) {
+      log_step("CytoTRACE2 failed in parallel mode (", conditionMessage(e),
+               "); retrying without parallelisation")
+      CytoTRACE2::cytotrace2(expr, is_seurat = FALSE,
+                             species = cfg$annotation$cytotrace_species,
+                             ncores = 1L, disable_parallelization = TRUE)
+    })
 
   if (!"CytoTRACE2_Potency" %in% colnames(result))
     stop("CytoTRACE2 returned no CytoTRACE2_Potency column. It returned: ",
