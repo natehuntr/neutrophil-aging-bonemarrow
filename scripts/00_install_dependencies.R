@@ -153,10 +153,10 @@ if (requireNamespace("BiocManager", quietly = TRUE)) {
 # doing, but this path does not need it.
 github <- Filter(Negate(is.null), list(
   list(name = "monocle3",       repo = "cole-trapnell-lab/monocle3"),
-  # Only used by to_cds(), i.e. building a monocle3 object from a Seurat one in
-  # step 5. Its dependency tree now pulls in Banksy, liger, hdf5r and RcppPlanc,
-  # which fail on this toolchain and which nothing here needs. Set
-  # INSTALL_SEURATWRAPPERS=1 to attempt it anyway.
+  # Optional. to_cds() falls back to seurat_to_cds(), which does the same
+  # conversion with monocle3 alone, so step 5 runs without it. Its dependency
+  # tree pulls in Banksy, liger, hdf5r and RcppPlanc, which fail on this
+  # toolchain. Set INSTALL_SEURATWRAPPERS=1 to attempt it anyway.
   if (nzchar(Sys.getenv("INSTALL_SEURATWRAPPERS")))
     list(name = "SeuratWrappers", repo = "satijalab/seurat-wrappers"),
   list(name = "CytoTRACE2",     repo = "digitalcytometry/cytotrace2",
@@ -271,9 +271,9 @@ for (spec in github)
 # this a run that installed nothing still looks like it worked.
 # ---------------------------------------------------------------------------
 # Which steps need what. A package missing here blocks only the steps listed
-# against it, and saying so is more useful than a flat list -- SeuratWrappers,
-# for instance, is used only when building a trajectory from a Seurat object,
-# so a finished step 5 does not need it again.
+# against it, and saying so is more useful than a flat list. Optional packages
+# with a working fallback (SeuratWrappers) are left out entirely, so a clean
+# report means the pipeline can run end to end.
 needed_by <- list(
   "Seurat"               = "all steps",
   "Matrix"               = "all steps",
@@ -297,7 +297,7 @@ needed_by <- list(
   "monocle3"             = "5, 7, 9",
   # step 5 is complete once combined_cds.rds exists, so this only matters if
   # the trajectory is rebuilt from scratch
-  "SeuratWrappers"       = "5 (only if rebuilding the trajectory)",
+
   "tradeSeq"             = "5",
   "glmGamPoi"            = "2, 3, 7",
   "fgsea"                = "8",

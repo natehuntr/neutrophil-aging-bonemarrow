@@ -8,10 +8,44 @@
 # closest to the cells of the earliest developmental stage).
 # ---------------------------------------------------------------------------
 
+#' Build a cell_data_set from a Seurat object without SeuratWrappers.
+#'
+#' SeuratWrappers::as.cell_data_set() is a thin wrapper, but its dependency
+#' tree now pulls in Banksy, liger, hdf5r and RcppPlanc, none of which this
+#' pipeline uses and several of which do not build on a stock HPC toolchain.
+#' The conversion itself is three slots, so it is done directly here.
+#'
+#' Reduction names are upper-cased because monocle3 addresses reducedDims by
+#' "PCA" / "UMAP" while Seurat stores "pca" / "umap". preprocess_cds()
+#' overwrites PCA immediately afterwards; UMAP is what cluster_cells() and
+#' learn_graph() actually read.
+seurat_to_cds <- function(obj, assay = "RNA") {
+  counts <- SeuratObject::GetAssayData(obj, assay = assay, layer = "counts")
+
+  gene_meta <- data.frame(gene_short_name = rownames(counts),
+                          row.names = rownames(counts))
+  cds <- monocle3::new_cell_data_set(
+    counts,
+    cell_metadata = obj[[]][colnames(counts), , drop = FALSE],
+    gene_metadata = gene_meta)
+
+  for (nm in names(obj@reductions)) {
+    emb <- SeuratObject::Embeddings(obj, reduction = nm)
+    SingleCellExperiment::reducedDims(cds)[[toupper(nm)]] <-
+      emb[colnames(cds), , drop = FALSE]
+  }
+  cds
+}
+
 #' Convert a Seurat object to a monocle3 cell_data_set and preprocess it.
 to_cds <- function(obj, assay = "RNA", num_dim = 50) {
   obj <- join_layers(obj)
-  cds <- SeuratWrappers::as.cell_data_set(obj, assay = assay)
+  cds <- if (requireNamespace("SeuratWrappers", quietly = TRUE)) {
+    SeuratWrappers::as.cell_data_set(obj, assay = assay)
+  } else {
+    log_step("SeuratWrappers not installed -- converting to a cell_data_set directly")
+    seurat_to_cds(obj, assay = assay)
+  }
   cds <- monocle3::preprocess_cds(cds, num_dim = num_dim)
   monocle3::cluster_cells(cds)
 }
