@@ -246,6 +246,9 @@ clustering:
 
 annotation:
   singler_ref: immgen
+  # Only read by celldex >= 1.14, whose fetchReference() takes a version.
+  # Older celldex (<= 1.12, Bioconductor 3.18) serves one fixed snapshot per
+  # reference through ImmGenData() and ignores this.
   singler_ref_version: "2024-02-26"
   # Fine-label prefixes kept for the stem-cell/neutrophil subset.
   neustem_label_pattern: "^Neutrophils|^Stem cells"

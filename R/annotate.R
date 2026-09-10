@@ -3,13 +3,44 @@
 # CytoTRACE2 potency, and neutrophil maturation module scores.
 # ---------------------------------------------------------------------------
 
+# celldex renamed its whole interface. Up to 1.12 (Bioconductor 3.18) each
+# reference had its own function, ImmGenData() and friends; from 1.14 they are
+# all served by fetchReference(name, version) off ExperimentHub. Both return
+# the same shape -- a SummarizedExperiment with label.main and label.fine in
+# colData -- so the pipeline only has to pick the call that exists.
+LEGACY_CELLDEX <- c(
+  immgen         = "ImmGenData",
+  mouse_rnaseq   = "MouseRNAseqData",
+  hpca           = "HumanPrimaryCellAtlasData",
+  blueprint_encode = "BlueprintEncodeData",
+  dice           = "DatabaseImmuneCellExpressionData",
+  novershtern_hematopoietic = "NovershternHematopoieticData",
+  monaco_immune  = "MonacoImmuneData"
+)
+
+#' Fetch a celldex reference through whichever API this celldex exposes.
+load_singler_reference <- function(cfg) {
+  name <- cfg$annotation$singler_ref
+  exports <- getNamespaceExports("celldex")
+
+  if ("fetchReference" %in% exports)
+    return(celldex::fetchReference(name, cfg$annotation$singler_ref_version))
+
+  legacy <- LEGACY_CELLDEX[[name]]
+  if (is.null(legacy) || !legacy %in% exports)
+    stop("celldex ", utils::packageVersion("celldex"), " has neither ",
+         "fetchReference() nor a function for reference '", name, "'.")
+  log_step("celldex ", utils::packageVersion("celldex"),
+           " predates fetchReference(); using ", legacy, "()")
+  get(legacy, envir = asNamespace("celldex"))()
+}
+
 #' Label cells against the ImmGen reference at both main and fine resolution.
 #'
 #' Cells SingleR cannot label confidently are pruned to NA; they are relabelled
 #' "NA" so they show up explicitly in plots and tables rather than vanishing.
 annotate_singler <- function(obj, cfg) {
-  ref <- celldex::fetchReference(cfg$annotation$singler_ref,
-                                 cfg$annotation$singler_ref_version)
+  ref <- load_singler_reference(cfg)
   sce <- Seurat::as.SingleCellExperiment(obj, assay = "RNA")
 
   main <- SingleR::SingleR(test = sce, ref = ref, labels = ref$label.main)
