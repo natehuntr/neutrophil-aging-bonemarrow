@@ -240,6 +240,48 @@ score_adt_panels <- function(obj, cfg, assay = "ADT") {
   scaled <- t(scale(t(adt)))
   scaled[!is.finite(scaled)] <- 0
 
+  # What each panel reduces to once unresolvable markers are dropped. A panel
+  # is only as specific as the antibodies actually on the plate, and two panels
+  # that differ solely in a missing marker become the SAME panel -- they then
+  # score identically, tie, and every cell they would have claimed falls below
+  # the ambiguity margin and is labelled NA. That looks like "this stage is not
+  # present in the data" when it means "this stage is not measurable".
+  effective <- lapply(panels, function(panel)
+    lapply(c("high", "low"), function(side)
+      sort(intersect(stats::na.omit(unname(resolved[unlist(panel[[side]])])),
+                     rownames(scaled)))))
+  names(effective) <- names(panels)
+
+  log_step("effective ADT panels after dropping unresolvable markers:")
+  for (nm in names(effective))
+    log_step(sprintf("  %-9s high: %-28s low: %s", nm,
+                     paste(effective[[nm]][[1]], collapse = "+") %|""|% "(none)",
+                     paste(effective[[nm]][[2]], collapse = "+") %|""|% "(none)"))
+
+  # Key the two sides separately: flattening them would make a panel with no
+  # high markers collide with one whose high markers are another's low set.
+  keys <- vapply(effective, function(e)
+    paste(paste(e[[1]], collapse = "+"), paste(e[[2]], collapse = "+"),
+          sep = " / "), character(1))
+  collapsed <- split(names(keys), keys)
+  collapsed <- collapsed[lengths(collapsed) > 1]
+  if (length(collapsed))
+    warning("ADT stage panels are degenerate -- these groups reduce to the ",
+            "same markers and cannot be told apart:\n",
+            paste0("  ", vapply(collapsed, paste, character(1), collapse = " = "),
+                   collapse = "\n"),
+            "\nCells belonging to them will tie and be labelled NA. Either add ",
+            "the missing antibodies to stage_assignment.adt_panels' aliases, ",
+            "merge these stages in analysis.stage_levels, or switch ",
+            "stage_assignment.method to 'markers'.")
+
+  no_high <- names(effective)[vapply(effective, function(e) !length(e[[1]]), logical(1))]
+  if (length(no_high))
+    warning("ADT stage panel(s) with no positive marker left: ",
+            paste(no_high, collapse = ", "),
+            ". Their score is the absence of the 'low' markers rather than the ",
+            "presence of anything, which is not a call for that stage.")
+
   panel_score <- function(panel) {
     take <- function(side) {
       markers <- stats::na.omit(unname(resolved[unlist(panel[[side]])]))

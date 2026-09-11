@@ -48,13 +48,13 @@ plot_pseudobulk_pca <- function(obj, cfg, label = NULL,
       message("skipping '", label, "': ", length(cells), " cells")
       return(NULL)
     }
-    obj <- subset(obj, cells = cells)
+    obj <- subset(drop_graphs(obj), cells = cells)
   }
 
   # A cell with no hashtag call has no age_sex, and AverageExpression would
   # turn those into their own "NA" column.
   labelled <- colnames(obj)[!is.na(obj[[group_col]][, 1])]
-  obj <- subset(obj, cells = labelled)
+  obj <- subset(drop_graphs(obj), cells = labelled)
 
   avg <- Seurat::AverageExpression(obj, group.by = group_col,
                                    assays = "RNA", layer = "data")$RNA

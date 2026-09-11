@@ -56,15 +56,21 @@ gate_sex_chromosome_genes <- function(ranked_genes, obj, cfg) {
 }
 
 #' Compared groups must be within a modest depth ratio.
-gate_depth_ratio <- function(counts, groups, cfg) {
+#'
+#' Evaluate this on the counts the analysis will actually use. Run against raw
+#' counts it fails by construction -- the whole reason the matched assay exists
+#' is that the raw libraries differ in depth -- so gating there would block the
+#' pipeline on the problem the next step solves. `label` names which counts
+#' were measured so the table says so.
+gate_depth_ratio <- function(counts, groups, cfg, label = "compared groups") {
   ratio <- depth_ratio(counts, groups)
   gate_result(
     "depth ratio", ratio <= cfg$gates$max_depth_ratio,
-    sprintf("%.2fx between compared groups (limit %.2fx); medians: %s",
-            ratio, cfg$gates$max_depth_ratio,
+    sprintf("%.2fx between %s (limit %.2fx); medians: %s",
+            ratio, label, cfg$gates$max_depth_ratio,
             paste(sprintf("%s=%.0f", names(group_depth(counts, groups)),
                           group_depth(counts, groups)), collapse = ", ")),
-    "any differential test on unmatched counts")
+    "any differential test on these counts")
 }
 
 #' No stratum below the minimum cell count may produce output.

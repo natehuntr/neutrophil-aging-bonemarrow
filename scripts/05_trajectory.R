@@ -23,7 +23,9 @@
 source(if (file.exists("R/setup.R")) "R/setup.R" else "../R/setup.R")
 cfg <- init_project()
 load_modules()
-require_packages("monocle3", "SeuratWrappers", "tradeSeq",
+# SeuratWrappers is deliberately absent: to_cds() falls back to
+# seurat_to_cds(), which does the same conversion with monocle3 alone.
+require_packages("monocle3", "tradeSeq",
                  "SingleCellExperiment", "SummarizedExperiment")
 
 age_levels <- cfg$analysis$age_levels

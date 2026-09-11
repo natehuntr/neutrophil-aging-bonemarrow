@@ -54,6 +54,20 @@ reduction_ncol <- function(obj, reduction) {
   else ncol(fn(obj, reduction = reduction))
 }
 
+#' Drop the nearest-neighbour graphs before subsetting.
+#'
+#' subset.Seurat() re-wraps every Graph through as.Graph(), which insists on
+#' dimnames. The WNN graphs written during the merge do not always carry them,
+#' and the result is "Please provide rownames to the matrix before converting
+#' to a Graph" from a call that has nothing to do with graphs. Anything that
+#' subsets purely to aggregate expression can drop them first: they are a
+#' cached neighbourhood, not data.
+drop_graphs <- function(obj) {
+  obj@graphs <- list()
+  if (.hasSlot(obj, "neighbors")) obj@neighbors <- list()
+  obj
+}
+
 #' Join the split layers a v5 assay gets after a merge.
 #'
 #' A no-op on Seurat v4 and on assays that are not split, so it is safe to

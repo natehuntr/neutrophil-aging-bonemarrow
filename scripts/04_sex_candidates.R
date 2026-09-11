@@ -50,24 +50,33 @@ log_step("sex-chromosome genes in the probe set: ",
          paste(panel$gene[panel$in_panel], collapse = ", "), " (of ",
          paste(panel$gene, collapse = ", "), ")")
 
+# Gates that do not depend on depth matching are checked first, so a stratum
+# problem is reported before minutes are spent thinning counts.
 stage_sex <- table(paste(obj$sex, obj$stage), useNA = "no")
-gates <- list(
-  gate_depth_ratio(counts, groups, cfg),
-  gate_stratum_sizes(stage_sex, cfg)
-)
-gate_results <- run_gates(gates, cfg, "sex contrast")
-write_table(gate_results, cfg, "sex_control_gates.csv")
+pre_gates <- run_gates(list(gate_stratum_sizes(stage_sex, cfg)), cfg,
+                       "sex contrast, before matching")
 
 # ===========================================================================
 # 2. Depth matching, and the diagnostics that justify it
 # ===========================================================================
+log_step("depth ratio before matching: ",
+         round(depth_ratio(counts, groups), 3), "x")
 detection <- detection_rates(counts, groups)
 write_confound_diagnostics(obj, cfg, detection = detection)
 
 obj <- add_matched_assay(obj, cfg, group_col = "sex")
 matched_counts <- Seurat::GetAssayData(obj, assay = "RNAmatched", layer = "counts")
-log_step("depth ratio after matching: ",
-         round(depth_ratio(matched_counts, groups), 3), "x")
+
+# The depth gate belongs HERE, on the matched counts -- those are what every
+# effect size below is computed from. Checking it before matching would fail
+# on the raw libraries every time, which is the known starting condition
+# rather than a finding.
+gate_results <- rbind(
+  pre_gates,
+  run_gates(list(gate_depth_ratio(matched_counts, groups, cfg,
+                                  label = "depth-matched counts")),
+            cfg, "sex contrast, after matching"))
+write_table(gate_results, cfg, "sex_control_gates.csv")
 
 # ===========================================================================
 # 3. Module scores, within ADT-defined stage

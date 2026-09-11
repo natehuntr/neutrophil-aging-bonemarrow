@@ -22,6 +22,7 @@ PROJECT_ROOT <- local({
 project_path <- function(...) file.path(PROJECT_ROOT, ...)
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
+`%|""|%` <- function(x, y) if (!nzchar(x)) y else x
 
 #' Read config/config.yml and resolve its paths against the project root.
 load_config <- function(path = project_path("config", "config.yml")) {
