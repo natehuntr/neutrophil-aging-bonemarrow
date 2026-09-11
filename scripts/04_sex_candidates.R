@@ -53,8 +53,11 @@ log_step("sex-chromosome genes in the probe set: ",
 # Gates that do not depend on depth matching are checked first, so a stratum
 # problem is reported before minutes are spent thinning counts.
 stage_sex <- table(paste(obj$sex, obj$stage), useNA = "no")
-pre_gates <- run_gates(list(gate_stratum_sizes(stage_sex, cfg)), cfg,
-                       "sex contrast, before matching")
+# require_all = FALSE: undersized stages are skipped by the per-stage loop
+# below, exactly as steps 6 and 8 skip theirs. Only a complete absence of
+# usable strata is worth stopping for.
+pre_gates <- run_gates(list(gate_stratum_sizes(stage_sex, cfg, require_all = FALSE)),
+                       cfg, "sex contrast, before matching")
 
 # ===========================================================================
 # 2. Depth matching, and the diagnostics that justify it

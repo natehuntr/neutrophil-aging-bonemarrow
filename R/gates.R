@@ -74,17 +74,28 @@ gate_depth_ratio <- function(counts, groups, cfg, label = "compared groups") {
 }
 
 #' No stratum below the minimum cell count may produce output.
-gate_stratum_sizes <- function(counts_table, cfg) {
+#'
+#' This gate's scope is the LISTED STRATA, not the step: a rare stage that no
+#' run could ever populate is a reason to drop that stage, not to abandon the
+#' other five. Callers that analyse strata one at a time should use
+#' stratum_is_usable() inside the loop and reserve this gate for the question
+#' it can actually answer -- whether anything is left to analyse at all.
+gate_stratum_sizes <- function(counts_table, cfg, require_all = TRUE) {
   smallest <- min(counts_table)
-  failing <- names(which(counts_table < cfg$gates$min_cells_per_stratum))
+  min_cells <- cfg$gates$min_cells_per_stratum
+  failing <- names(which(counts_table < min_cells))
+  usable <- names(which(counts_table >= min_cells))
+
+  passed <- if (require_all) smallest >= min_cells else length(usable) > 0
   gate_result(
-    "minimum cells per stratum", smallest >= cfg$gates$min_cells_per_stratum,
-    sprintf("smallest stratum has %d cells (gate is %d)%s",
-            smallest, cfg$gates$min_cells_per_stratum,
+    "minimum cells per stratum", passed,
+    sprintf("%d of %d strata at or above %d cells (smallest has %d)%s",
+            length(usable), length(counts_table), min_cells, smallest,
             if (length(failing))
-              paste0("; below gate: ", paste(utils::head(failing, 8), collapse = ", "))
+              paste0("; excluded: ", paste(utils::head(failing, 8), collapse = ", "))
             else ""),
-    "stage-stratified results for the listed strata")
+    if (require_all) "stage-stratified results for the listed strata"
+    else "every stage-stratified result, since no stratum is large enough")
 }
 
 #' Isotype controls must come out non-significant.
