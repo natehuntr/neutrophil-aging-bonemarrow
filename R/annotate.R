@@ -332,15 +332,35 @@ assign_stage_markers <- function(obj, cfg, assay = "RNA", to = "stage_rna") {
   require_packages("UCell")
   signatures <- lapply(cfg$stage_assignment$rna_signatures, unlist)
 
+  # NOT "_UCell": step 4 scores gene sets into columns with that suffix and
+  # selects them by it. Six stage signatures sitting in the object under the
+  # same suffix would be picked up as candidate modules.
   obj <- UCell::AddModuleScore_UCell(obj, features = signatures, assay = assay,
-                                     name = "_UCell")
-  score_cols <- paste0(names(signatures), "_UCell")
-  present <- intersect(score_cols, colnames(obj@meta.data))
+                                     name = "_stagescore")
+  present <- intersect(paste0(names(signatures), "_stagescore"),
+                       colnames(obj@meta.data))
   scores <- as.matrix(obj@meta.data[, present, drop = FALSE])
 
-  best <- sub("_UCell$", "", present)[apply(scores, 1, which.max)]
+  # Same ambiguity treatment the ADT route gets: a cell whose top two
+  # signatures are indistinguishable has not been staged, it has been rounded.
+  # The default margin is 0, which assigns every cell -- the margin quantiles
+  # below are what tells you where to set it.
+  ordered <- t(apply(scores, 1, sort, decreasing = TRUE))
+  margin <- ordered[, 1] - ordered[, 2]
+  min_margin <- cfg$stage_assignment$marker_min_margin %||% 0
+
+  best <- sub("_stagescore$", "", present)[apply(scores, 1, which.max)]
+  best[margin < min_margin] <- NA_character_
+
   obj[[to]] <- factor(best, levels = cfg$analysis$stage_levels)
-  log_step("UCell stage assignment:")
+  obj[[paste0(to, "_margin")]] <- margin
+
+  log_step(sprintf("UCell stage assignment: %d of %d cells assigned (margin >= %.3f)",
+                   sum(!is.na(best)), length(best), min_margin))
+  log_step("  margin quantiles: ",
+           paste(sprintf("%s=%.3f", names(stats::quantile(margin, c(.1, .25, .5, .75))),
+                         stats::quantile(margin, c(.1, .25, .5, .75))),
+                 collapse = ", "))
   print(table(obj[[to]][, 1], useNA = "ifany"))
   obj
 }
@@ -358,12 +378,29 @@ assign_stage_clusters <- function(obj, cfg, cluster_col = "seurat_clusters",
   obj
 }
 
+#' Metadata column each stage-assignment method writes when run as the
+#' comparison rather than as the primary assignment.
+STAGE_COMPARISON_COLUMN <- c(adt = "stage_adt", markers = "stage_rna",
+                             clusters = "stage_clusters")
+
+#' Which column stage_assignment.compare_against will have produced.
+comparison_column <- function(cfg) {
+  method <- cfg$stage_assignment$compare_against
+  if (is.null(method) || identical(method, cfg$stage_assignment$method))
+    return(NULL)
+  unname(STAGE_COMPARISON_COLUMN[method])
+}
+
 #' Confusion matrix between two stage assignments.
 #'
 #' Run as a formal comparison rather than a spot check: if protein-defined and
 #' RNA-cluster-defined stages disagree substantially, that disagreement is
 #' itself a result, and it decides which stratification the analyses should use.
 stage_confusion <- function(obj, a = "stage", b = "stage_clusters") {
+  if (is.null(b)) {
+    log_step("no second stage assignment configured; nothing to compare")
+    return(NULL)
+  }
   missing <- setdiff(c(a, b), colnames(obj@meta.data))
   if (length(missing)) {
     log_step("cannot compare stage assignments; missing: ", paste(missing, collapse = ", "))

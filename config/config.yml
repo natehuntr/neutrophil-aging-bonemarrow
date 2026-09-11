@@ -286,10 +286,22 @@ analysis:
 #   clusters - the old cluster-id mapping, kept only for the comparison
 # ---------------------------------------------------------------------------
 stage_assignment:
-  method: adt
+  # markers: UCell on the RNA signatures below. Chosen over `adt` because the
+  # ADT panel on this run carries no CD117, CD101 or CD177, which leaves
+  # proNeu and proNeu2 reducing to the same two antibodies and GMPs with no
+  # positive marker at all -- see the effective-panel table step 3 prints.
+  # UCell ranks genes within each cell, so it is far less depth-sensitive than
+  # a mean-expression score, but it is still RNA: the stratification is no
+  # longer independent of the modality the analyses run on.
+  method: markers
   # Reported as a confusion matrix against `method`, because a substantial
-  # disagreement is itself a result.
-  compare_against: clusters
+  # disagreement is itself a result. Kept on adt: the three stages its panel
+  # CAN still resolve are an independent check on the RNA calls.
+  compare_against: adt
+  # Minimum gap between the best and second-best signature score for a cell to
+  # be staged at all; 0 assigns every cell. Step 3 prints the margin quantiles
+  # -- set this from those rather than by guessing.
+  marker_min_margin: 0
   # Surface markers per stage. Names must match rownames of the ADT assay;
   # adt_marker_aliases below maps panel names onto these.
   adt_panels:

@@ -93,7 +93,11 @@ log_step(length(gs), " gene sets have a proposed orthogonal assay")
 
 Seurat::DefaultAssay(obj) <- "RNAmatched"
 obj <- add_module_scores_ucell(obj, gs, assay = "RNAmatched")
-score_cols <- grep("_UCell$", colnames(obj@meta.data), value = TRUE)
+# Name the columns from the sets that were just scored rather than grepping the
+# suffix: other steps leave their own UCell scores on the object, and a grep
+# would sweep those in as candidate modules.
+score_cols <- intersect(paste0(names(gs), "_UCell"), colnames(obj@meta.data))
+if (!length(score_cols)) stop("no module scores were written; nothing to rank")
 
 # ===========================================================================
 # 4-5. Per stage: effects, depth controls, and the null floor
