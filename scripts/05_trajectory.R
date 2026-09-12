@@ -31,6 +31,20 @@ require_packages("monocle3", "tradeSeq",
 age_levels <- cfg$analysis$age_levels
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
 
+# The trajectory is what step 9's pseudotime comparison reads, so matching has
+# to happen HERE for that comparison to be on matched counts -- thinning after
+# the graph is built changes nothing about where cells sit on it.
+traj_assay <- if (isTRUE(cfg$depth$match) && isTRUE(cfg$depth$match_trajectory)) {
+  if (!"RNAmatched" %in% assay_names(gmp_neu))
+    stop("depth.match_trajectory is set, but RNAmatched is not on the object. ",
+         "Re-run step 3 to build it.")
+  log_step("trajectory built on depth-matched counts (RNAmatched)")
+  "RNAmatched"
+} else {
+  log_step("trajectory built on raw counts (depth.match_trajectory is off)")
+  "RNA"
+}
+
 # --- 1. One trajectory per sex x age --------------------------------------
 moran_lists <- list()
 
@@ -44,7 +58,7 @@ for (sex in cfg$analysis$sex_levels) {
             " -- those trajectories are not worth much")
 
   results <- trajectory_by_group(gmp_neu, cfg, cells_by_age, prefix = sex,
-                                 root_group = "GMPs")
+                                 root_group = "GMPs", assay = traj_assay)
 
   # Significantly graph-associated genes, per age, for the overlap plot.
   sig <- lapply(results, function(r) rownames(r$moran)[r$moran$q_value < 0.05])
@@ -70,7 +84,7 @@ combined <- select_cells(gmp_neu, list(
   "age is one of analysis.age_levels" = gmp_neu$age %in% age_levels
 ), context = "combined trajectory input")
 
-combined_cds <- to_cds(combined)
+combined_cds <- to_cds(combined, assay = traj_assay)
 combined_cds <- learn_trajectory(combined_cds, use_partition = FALSE, ncenter = 300,
                                  root_group = "GMPs")
 save_object(combined_cds, cfg, "combined_cds.rds")

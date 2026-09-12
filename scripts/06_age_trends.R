@@ -27,6 +27,7 @@ load_modules()
 age_levels <- cfg$analysis$age_levels
 sexes <- cfg$analysis$sex_levels
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
+trend_assay <- matched_assay_for(gmp_neu, cfg, step = 6)
 require_metadata(gmp_neu, c("stage", "age", "sex"), context = "step 6")
 
 # --- pseudobulk overview ---------------------------------------------------
@@ -70,7 +71,8 @@ for (stage in cfg$analysis$stage_levels) {
     # Excess over a permutation null rather than a bare |rho| cutoff: a fixed
     # threshold has no null and is n-dependent, so its gene count mostly
     # reports how many cells the stratum had.
-    res <- age_trend_excess(sub, cfg, label = paste(stage, sex, sep = "/"))
+    res <- age_trend_excess(sub, cfg, label = paste(stage, sex, sep = "/"),
+                            assay = trend_assay)
     if (is.null(res)) next
     trend_results[[paste(stage, sex, sep = "_")]] <- res
 

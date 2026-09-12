@@ -67,8 +67,13 @@ log_step("depth ratio before matching: ",
 detection <- detection_rates(counts, groups)
 write_confound_diagnostics(obj, cfg, detection = detection)
 
-obj <- add_matched_assay(obj, cfg, group_col = "sex")
-matched_counts <- Seurat::GetAssayData(obj, assay = "RNAmatched", layer = "counts")
+# Built in step 3 on depth.match_on (age_sex), which is finer than the sex
+# grouping this step contrasts, so it is never less conservative here.
+matched_assay <- matched_assay_for(obj, cfg, step = 4)
+if (!identical(matched_assay, "RNAmatched"))
+  stop("step 4 cannot run on unmatched counts: the depth-matched assay IS the ",
+       "analysis. Put 4 back in depth.matched_steps.")
+matched_counts <- Seurat::GetAssayData(obj, assay = matched_assay, layer = "counts")
 
 # The depth gate belongs HERE, on the matched counts -- those are what every
 # effect size below is computed from. Checking it before matching would fail

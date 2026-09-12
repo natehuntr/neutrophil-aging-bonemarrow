@@ -141,15 +141,21 @@ survives_matching <- function(observed, matched, tolerance = 0.5) {
   abs(matched) >= tolerance * abs(observed)
 }
 
-#' Depth per age WITHIN each sex, and how far it varies.
+#' Depth per age WITHIN each sex, optionally within stage as well.
 #'
 #' The within-sex age comparisons in step 9 are shifts relative to the first
 #' age, so a constant depth difference between the two libraries cancels. What
 #' does not cancel is depth varying BETWEEN HASHTAGS INSIDE one library: each
 #' age is a separate hashtag in the same run, and both pseudotime position and
-#' CytoTRACE2 potency track transcriptional complexity. If 18m cells are
-#' shallower than 3m cells in the same library, both measures shift together
-#' and neither is evidence for the other.
+#' CytoTRACE2 potency track transcriptional complexity.
+#'
+#' POOLING STAGES MAKES THIS UNREADABLE. Complexity is a property of the cell
+#' type -- GMPs carry far more detectable genes than mature neutrophils -- so
+#' when the stage mix shifts with age, pooled complexity shifts with it and
+#' nothing technical need be wrong. Males go from 29% GMP / 14% mature at 3m to
+#' 43% / 8% at 18m, which on its own raises pooled genes detected. Only the
+#' per-stage rows separate a real depth trend from a composition shift, so both
+#' are computed and the per-stage rows are the ones to read.
 #'
 #' `umi_ratio` and `gene_ratio` are each age's median depth and median genes
 #' detected over the reference age's. BOTH have to be near 1.0: genes detected
@@ -157,6 +163,7 @@ survives_matching <- function(observed, matched, tolerance = 0.5) {
 #' that moves independently of total counts.
 depth_by_age_within_sex <- function(obj, cfg, assay = "RNA",
                                     age_col = "age", sex_col = "sex",
+                                    stage_col = "stage",
                                     age_levels = cfg$analysis$age_levels) {
   counts <- Seurat::GetAssayData(obj, assay = assay, layer = "counts")
   totals <- Matrix::colSums(counts)
@@ -164,73 +171,131 @@ depth_by_age_within_sex <- function(obj, cfg, assay = "RNA",
 
   age <- as.character(obj[[age_col]][, 1])
   sex <- as.character(obj[[sex_col]][, 1])
-  keep <- !is.na(age) & !is.na(sex) & age %in% age_levels
+  stage <- if (stage_col %in% colnames(obj@meta.data))
+    as.character(obj[[stage_col]][, 1]) else rep(NA_character_, ncol(obj))
+  usable <- !is.na(age) & !is.na(sex) & age %in% age_levels
 
-  rows <- lapply(split(which(keep), sex[keep]), function(idx) {
+  summarise <- function(idx, stage_label) {
     by_age <- split(idx, factor(age[idx], levels = age_levels))
     by_age <- by_age[lengths(by_age) > 0]
+    if (length(by_age) < 2) return(NULL)
     tbl <- data.frame(
+      stage = stage_label,
       sex = sex[idx][1],
       age = names(by_age),
       n_cells = vapply(by_age, length, integer(1)),
       median_umi = vapply(by_age, function(i) stats::median(totals[i]), numeric(1)),
       median_genes = vapply(by_age, function(i) stats::median(detected[i]), numeric(1)),
       row.names = NULL, stringsAsFactors = FALSE)
-    # The reference is the first configured age present, matching how the
-    # pseudotime and potency shifts are anchored.
     tbl$umi_ratio <- tbl$median_umi / tbl$median_umi[1]
-    # Genes detected, not just total UMIs. CytoTRACE2 and pseudotime position
-    # track transcriptional COMPLEXITY, and complexity is the gene count. The
-    # two ratios come apart badly here -- a library can hold total counts
-    # steady while detecting far more distinct genes -- so gating on UMIs
-    # alone passes strata that are not comparable at all.
     tbl$gene_ratio <- tbl$median_genes / tbl$median_genes[1]
+    tbl$reference_age <- tbl$age[1]
     tbl
-  })
+  }
 
-  out <- do.call(rbind, c(rows, list(make.row.names = FALSE)))
-  out$reference_age <- out$age[1]
-  out
+  pooled <- lapply(split(which(usable), sex[usable]), summarise,
+                   stage_label = "ALL STAGES (composition-confounded)")
+
+  per_stage <- list()
+  if (any(!is.na(stage))) {
+    keep <- usable & !is.na(stage)
+    for (st in sort(unique(stage[keep]))) {
+      idx <- which(keep & stage == st)
+      per_stage <- c(per_stage, lapply(split(idx, sex[idx]), summarise,
+                                       stage_label = st))
+    }
+  }
+
+  do.call(rbind, c(Filter(Negate(is.null), c(pooled, per_stage)),
+                   list(make.row.names = FALSE)))
 }
 
 #' Report the depth-by-age table and say plainly what it implies.
-report_depth_by_age <- function(tbl, cfg) {
+report_depth_by_age <- function(tbl, cfg,
+                                min_cells = cfg$gates$min_cells_per_stratum) {
   limit <- cfg$gates$max_depth_ratio %||% 1.3
+  pooled_label <- "ALL STAGES (composition-confounded)"
+
   log_step("sequencing depth by age, within each sex ",
            "(each age is a separate hashtag in the same library):")
-  print(tbl[, c("sex", "age", "n_cells", "median_umi", "median_genes",
+  print(tbl[, c("stage", "sex", "age", "n_cells", "median_umi", "median_genes",
                 "umi_ratio", "gene_ratio")], row.names = FALSE)
 
-  # Spread WITHIN each library, on both measures. Verdict takes the worse:
-  # passing on counts while failing on complexity is not a pass.
-  spread_of <- function(column) {
-    vapply(split(tbl[[column]], tbl$sex),
-           function(x) max(x) / min(x), numeric(1))
+  spread <- function(rows) {
+    if (!nrow(rows)) return(NULL)
+    by_group <- split(rows, paste(rows$stage, rows$sex))
+    do.call(rbind, lapply(by_group, function(g) data.frame(
+      stage = g$stage[1], sex = g$sex[1], n_min = min(g$n_cells),
+      umi_spread = max(g$umi_ratio) / min(g$umi_ratio),
+      gene_spread = max(g$gene_ratio) / min(g$gene_ratio),
+      row.names = NULL)))
   }
-  umi <- spread_of("umi_ratio")
-  genes <- spread_of("gene_ratio")
 
-  log_step("  spread across ages within each library:")
-  for (sx in names(umi))
-    log_step(sprintf("    %-7s UMIs %.2fx   genes detected %.2fx%s",
-                     sx, umi[[sx]], genes[[sx]],
-                     if (max(umi[[sx]], genes[[sx]]) > limit) "   <- over limit" else ""))
+  pooled <- spread(tbl[tbl$stage == pooled_label, ])
+  log_step("  pooled over stages -- reported for completeness, NOT a verdict: ",
+           "a stage-mix shift moves these on its own.")
+  if (!is.null(pooled))
+    for (i in seq_len(nrow(pooled)))
+      log_step(sprintf("    %-7s UMIs %.2fx   genes detected %.2fx",
+                       pooled$sex[i], pooled$umi_spread[i], pooled$gene_spread[i]))
 
-  worst <- max(c(umi, genes))
-  if (worst > limit) {
-    failing <- if (max(genes) > limit && max(umi) <= limit)
-      "genes detected, while total UMIs look flat" else "depth"
-    log_step(sprintf(
-      "  WARNING: %s varies up to %.2fx across ages within a library (limit %.2fx).",
-      failing, worst, limit))
+  staged <- spread(tbl[tbl$stage != pooled_label, ])
+  if (is.null(staged)) {
+    log_step("  no per-stage rows (no stage column): the verdict cannot be given.")
+    return(invisible(tbl))
+  }
+
+  # Strata too small to have a stable median say nothing either way.
+  staged$evaluated <- staged$n_min >= min_cells
+  log_step("  per stage, within each library -- THIS is the verdict:")
+  for (i in seq_len(nrow(staged)))
+    log_step(sprintf("    %-9s %-7s n>=%-4d UMIs %.2fx   genes %.2fx%s",
+                     staged$stage[i], staged$sex[i], staged$n_min[i],
+                     staged$umi_spread[i], staged$gene_spread[i],
+                     if (!staged$evaluated[i]) "   (too few cells to judge)"
+                     else if (max(staged$umi_spread[i], staged$gene_spread[i]) > limit)
+                       "   <- over limit" else ""))
+
+  judged <- staged[staged$evaluated, ]
+  over <- judged[pmax(judged$umi_spread, judged$gene_spread) > limit, ]
+  if (!nrow(judged)) {
+    log_step("  every stage-by-sex stratum is below ", min_cells,
+             " cells: no verdict.")
+  } else if (nrow(over)) {
+    log_step(sprintf("  WARNING: %d of %d evaluable strata exceed %.2fx: ",
+                     nrow(over), nrow(judged), limit),
+             paste(paste(over$stage, over$sex), collapse = ", "), ".")
     log_step("  Pseudotime position and CytoTRACE2 potency both track ",
              "transcriptional complexity, so an age trend in either could be ",
              "this trend. They do not corroborate each other while this holds.")
   } else {
-    log_step(sprintf(
-      "  both measures vary at most %.2fx across ages within a library (limit %.2fx): ",
-      worst, limit),
-      "the within-sex age trends are not explained by a depth trend.")
+    log_step(sprintf("  all %d evaluable strata are within %.2fx on both ",
+                     nrow(judged), limit),
+             "measures: the within-sex age trends are not explained by a ",
+             "depth or complexity trend.")
   }
   invisible(tbl)
+}
+
+#' Which assay a step should read: the shared matched one, or raw RNA.
+#'
+#' Returns "RNAmatched" only when the config asks for matching, the step is
+#' listed in depth.matched_steps, and the assay is actually on the object.
+#' A step that expects matched counts and does not find them says so rather
+#' than silently analysing unmatched ones -- that difference is the whole
+#' point of the assay.
+matched_assay_for <- function(obj, cfg, step, assay_name = "RNAmatched") {
+  wanted <- isTRUE(cfg$depth$match) &&
+    step %in% unlist(cfg$depth$matched_steps %||% list())
+  if (!wanted) {
+    log_step("step ", step, " reads the RNA assay (not in depth.matched_steps)")
+    return("RNA")
+  }
+  if (!assay_name %in% assay_names(obj))
+    stop("step ", step, " is configured to use depth-matched counts, but '",
+         assay_name, "' is not on this object.\n",
+         "It is built in step 3; re-run step 3 to create it, or remove ",
+         step, " from depth.matched_steps in config/config.yml.")
+  log_step("step ", step, " reads the ", assay_name, " assay (depth-matched)")
+  assay_name
 }

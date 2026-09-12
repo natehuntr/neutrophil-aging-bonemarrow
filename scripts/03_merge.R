@@ -149,6 +149,31 @@ save_figure(Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "seurat_clus
               Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "stage"),
             cfg, "gmp_neutrophil_clusters.pdf", width = 12, height = 5)
 
+# ---------------------------------------------------------------------------
+# Depth-matched counts, built once here and used by every step that compares
+# across strata. Matching on depth.match_on (age_sex) equalises the finest
+# grouping any downstream contrast uses, so step 4's sex contrast and steps
+# 6/9's within-sex age contrasts all read the same assay rather than each
+# thinning the counts their own way.
+# ---------------------------------------------------------------------------
+if (isTRUE(cfg$depth$match)) {
+  match_on <- cfg$depth$match_on %||% "sex"
+  require_metadata(gmp_neu, match_on, context = "depth matching")
+  gmp_neu <- add_matched_assay(gmp_neu, cfg, group_col = match_on)
+
+  # Potency is re-scored on the matched counts. CytoTRACE2 tracks
+  # transcriptional complexity directly, so of everything in the pipeline it
+  # is the measure most exposed to a depth difference -- and step 9 compares
+  # it across ages. The unmatched score stays on the object under its original
+  # name, so the two can be compared.
+  if (isTRUE(cfg$depth$match_potency)) {
+    log_step("re-scoring CytoTRACE2 on depth-matched counts")
+    rescored <- run_cytotrace2(gmp_neu, cfg, assay = "RNAmatched")
+    for (col in intersect(CYTOTRACE_COLUMNS, colnames(rescored@meta.data)))
+      gmp_neu[[paste0(col, "_matched")]] <- rescored[[col]][, 1]
+  }
+}
+
 save_object(gmp_neu, cfg, "gmp_neutrophils.rds")
 
 log_step("step 3 complete")

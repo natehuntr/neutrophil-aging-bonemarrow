@@ -124,7 +124,12 @@ if (!file.exists(object_path(cfg, "combined_cds.rds"))) {
   # landed -- but it is not an independent measurement: both run on the same
   # counts and both track transcriptional complexity, so both move with depth.
   # Section 0 is what says whether that shared vulnerability is live here.
-  potency <- SummarizedExperiment::colData(combined_cds)$CytoTRACE2_Score
+  # Prefer the score computed on depth-matched counts when step 3 wrote one.
+  cds_cols <- SummarizedExperiment::colData(combined_cds)
+  potency_col <- if ("CytoTRACE2_Score_matched" %in% colnames(cds_cols))
+    "CytoTRACE2_Score_matched" else "CytoTRACE2_Score"
+  log_step("potency source: ", potency_col)
+  potency <- cds_cols[[potency_col]]
   if (!is.null(potency) && any(is.finite(potency))) {
     log_step("=== potency (CytoTRACE2) ===")
     potency_result <- compare_across_ages_by_sex(as.numeric(potency), meta, cfg)

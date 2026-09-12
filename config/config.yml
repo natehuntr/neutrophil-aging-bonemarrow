@@ -184,8 +184,23 @@ qc:
 # ---------------------------------------------------------------------------
 depth:
   match: true
-  # "median" downsamples every cell toward the lower group median.
+  # "median" downsamples every cell toward the lowest group median.
   target: median
+  # Which strata are equalised when the shared RNAmatched assay is built in
+  # step 3. age_sex is the finest grouping any downstream step compares
+  # across -- step 4 contrasts sexes, steps 6 and 9 contrast ages within a
+  # sex -- so matching on it serves all three, and is never less conservative
+  # than matching on sex alone.
+  match_on: age_sex
+  # Steps that read RNAmatched instead of RNA. Step 5 is listed separately
+  # because rebuilding the trajectory on matched counts costs ~3.5 hours and
+  # step 9's pseudotime comes from it.
+  matched_steps: [4, 6, 8]
+  match_trajectory: true
+  # Re-score CytoTRACE2 on the matched counts in step 3. Of everything here it
+  # is the measure most directly exposed to depth, since it reads
+  # transcriptional complexity, and step 9 compares it across ages.
+  match_potency: true
   # Controls run alongside the real comparison. Each answers a different
   # question about whether the effect is real.
   controls:

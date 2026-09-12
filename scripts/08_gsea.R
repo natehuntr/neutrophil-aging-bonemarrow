@@ -39,6 +39,7 @@ args <- commandArgs(trailingOnly = TRUE)
 stages <- if (length(args)) args else cfg$gsea$stages
 
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
+gsea_assay <- matched_assay_for(gmp_neu, cfg, step = 8)
 require_metadata(gmp_neu, c("stage", "age", "sex"), context = "step 8")
 
 for (stage in stages) {
@@ -54,8 +55,8 @@ for (stage in stages) {
   if (!stratum_is_usable(as.vector(group_sizes), stage, cfg)) next
 
   neus <- join_layers(neus)
-  Seurat::DefaultAssay(neus) <- "RNA"
-  neus <- Seurat::NormalizeData(neus, verbose = FALSE)
+  Seurat::DefaultAssay(neus) <- gsea_assay
+  neus <- Seurat::NormalizeData(neus, assay = gsea_assay, verbose = FALSE)
 
   # --- 1. Per-sex age trends on one shared gene universe ------------------
   rho_male <- compute_rho_by_sex(neus, "male", cfg)

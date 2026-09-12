@@ -132,11 +132,13 @@ trajectory_by_group <- function(obj, cfg, group_cells, prefix,
                                 use_partition = FALSE,
                                 ncenter = 300,
                                 minimal_branch_len = 10,
-                                cores = cfg$compute$cores %||% 4) {
+                                cores = cfg$compute$cores %||% 4,
+                                assay = "RNA") {
   results <- list()
   for (nm in names(group_cells)) {
     log_step("trajectory: ", prefix, " ", nm)
-    cds <- to_cds(subset(obj, cells = group_cells[[nm]]))
+    cds <- to_cds(subset(drop_graphs(obj), cells = group_cells[[nm]]),
+                  assay = assay)
     cds <- learn_trajectory(cds,
                             use_partition = use_partition,
                             ncenter = ncenter,
