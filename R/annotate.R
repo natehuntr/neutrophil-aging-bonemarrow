@@ -434,17 +434,31 @@ stage_agreement_margins <- function(obj, a = "stage", b = NULL,
   out <- rbind(overall, per_stage)
   out$margin_ratio <- out$median_margin_disagree / out$median_margin_agree
 
+  # The verdict is PER STAGE, never pooled. Stages behave in opposite
+  # directions here -- one boundary can be genuinely fuzzy while another is a
+  # flat contradiction -- and the pooled row averages them into a reassuring
+  # number that describes neither. This is the same pooling error the GSEA
+  # step refuses to make.
+  out$verdict <- ifelse(
+    !is.finite(out$margin_ratio), "not evaluated",
+    ifelse(out$margin_ratio < 0.75, "fuzzy boundary",
+    ifelse(out$margin_ratio <= 1, "CONFLICT: disagreements as confident as agreements",
+           "CONFLICT: disagreements MORE confident than agreements")))
+  out$verdict[out$stage == "ALL"] <- paste0(out$verdict[out$stage == "ALL"],
+                                            " (pooled -- read the stages below)")
+
   log_step("assignment margin, cells the two methods agree on vs disagree on:")
   print(out, row.names = FALSE)
-  ratio <- out$margin_ratio[1]
-  if (is.finite(ratio) && ratio < 0.75)
-    log_step(sprintf(
-      "  disagreements sit at %.0f%% of the margin of agreements: the boundary is fuzzy, ",
-      100 * ratio),
-      "not contradicted -- neither method can adjudicate it.")
+
+  per_stage_only <- out[out$stage != "ALL", ]
+  conflicted <- per_stage_only$stage[grepl("^CONFLICT", per_stage_only$verdict)]
+  if (length(conflicted))
+    log_step("  stages where the two methods genuinely conflict: ",
+             paste(conflicted, collapse = ", "),
+             " -- the stratification needs a decision for these.")
   else
-    log_step("  disagreements are as confident as agreements: the two methods ",
-             "genuinely conflict, and the stratification needs a decision.")
+    log_step("  every stage's disagreements sit at lower margins than its ",
+             "agreements: the boundaries are fuzzy, not contradicted.")
   out
 }
 
