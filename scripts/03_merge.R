@@ -130,6 +130,13 @@ confusion <- stage_confusion(gmp_neu, "stage", comparison_column(cfg))
 if (!is.null(confusion))
   write_table(as.data.frame(confusion$table), cfg, "stage_assignment_confusion.csv")
 
+# How much the two methods disagree is only half the question. This asks
+# whether the cells they disagree about are ones the primary method was
+# confident about, which is what decides whether a disagreement is a problem.
+margins <- stage_agreement_margins(gmp_neu, "stage", comparison_column(cfg))
+if (!is.null(margins))
+  write_table(margins, cfg, "stage_assignment_margins.csv")
+
 log_step("cells per stage:")
 print(table(gmp_neu$stage, gmp_neu$sex, useNA = "ifany"))
 

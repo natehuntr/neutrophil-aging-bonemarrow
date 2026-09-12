@@ -379,6 +379,75 @@ assign_stage_clusters <- function(obj, cfg, cluster_col = "seurat_clusters",
   obj
 }
 
+#' Is a disagreement between two stage assignments graded or contradictory?
+#'
+#' A confusion matrix says HOW MUCH two methods disagree; it cannot say whether
+#' the disagreement matters. Cells the primary method could barely call are
+#' expected to land anywhere, and a second method scattering them is not
+#' evidence against either. Cells it called confidently are different: if the
+#' two methods confidently contradict each other, one of them is wrong about a
+#' real boundary.
+#'
+#' So compare the assignment margin between cells the two methods agree on and
+#' cells they do not. Disagreement concentrated at low margins means the
+#' boundary is simply fuzzy and neither method can adjudicate it. Disagreement
+#' at margins as high as the agreements means a genuine conflict.
+stage_agreement_margins <- function(obj, a = "stage", b = NULL,
+                                    margin_col = paste0(a, "_margin"),
+                                    restrict_to = NULL) {
+  needed <- c(a, b, margin_col)
+  if (is.null(b) || length(setdiff(needed, colnames(obj@meta.data)))) {
+    log_step("cannot compare assignment margins; missing: ",
+             paste(setdiff(needed, colnames(obj@meta.data)), collapse = ", "))
+    return(NULL)
+  }
+
+  primary <- as.character(obj[[a]][, 1])
+  secondary <- as.character(obj[[b]][, 1])
+  margin <- obj[[margin_col]][, 1]
+
+  keep <- !is.na(primary) & !is.na(secondary) & is.finite(margin)
+  if (!is.null(restrict_to)) keep <- keep & primary %in% restrict_to
+  if (sum(keep) < 10) {
+    log_step("too few cells labelled by both methods to compare margins")
+    return(NULL)
+  }
+
+  primary <- primary[keep]; secondary <- secondary[keep]; margin <- margin[keep]
+  agrees <- primary == secondary
+
+  overall <- data.frame(
+    stage = "ALL",
+    n_agree = sum(agrees), n_disagree = sum(!agrees),
+    median_margin_agree = stats::median(margin[agrees]),
+    median_margin_disagree = stats::median(margin[!agrees]),
+    row.names = NULL, stringsAsFactors = FALSE)
+
+  per_stage <- do.call(rbind, lapply(sort(unique(primary)), function(st) {
+    i <- primary == st
+    data.frame(stage = st, n_agree = sum(agrees[i]), n_disagree = sum(!agrees[i]),
+               median_margin_agree = stats::median(margin[i & agrees]),
+               median_margin_disagree = stats::median(margin[i & !agrees]),
+               row.names = NULL, stringsAsFactors = FALSE)
+  }))
+
+  out <- rbind(overall, per_stage)
+  out$margin_ratio <- out$median_margin_disagree / out$median_margin_agree
+
+  log_step("assignment margin, cells the two methods agree on vs disagree on:")
+  print(out, row.names = FALSE)
+  ratio <- out$margin_ratio[1]
+  if (is.finite(ratio) && ratio < 0.75)
+    log_step(sprintf(
+      "  disagreements sit at %.0f%% of the margin of agreements: the boundary is fuzzy, ",
+      100 * ratio),
+      "not contradicted -- neither method can adjudicate it.")
+  else
+    log_step("  disagreements are as confident as agreements: the two methods ",
+             "genuinely conflict, and the stratification needs a decision.")
+  out
+}
+
 #' Metadata column each stage-assignment method writes when run as the
 #' comparison rather than as the primary assignment.
 STAGE_COMPARISON_COLUMN <- c(adt = "stage_adt", markers = "stage_rna",
