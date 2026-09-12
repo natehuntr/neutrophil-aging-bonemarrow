@@ -38,7 +38,9 @@ traj_assay <- if (isTRUE(cfg$depth$match) && isTRUE(cfg$depth$match_trajectory))
   if (!"RNAmatched" %in% assay_names(gmp_neu))
     stop("depth.match_trajectory is set, but RNAmatched is not on the object. ",
          "Re-run step 3 to build it.")
-  log_step("trajectory built on depth-matched counts (RNAmatched)")
+  log_step("trajectory built on depth-matched counts (RNAmatched), with PCA ",
+           "and UMAP recomputed from them -- the graph is learned on the UMAP, ",
+           "so reusing Seurat's embedding would leave pseudotime unmatched")
   "RNAmatched"
 } else {
   log_step("trajectory built on raw counts (depth.match_trajectory is off)")

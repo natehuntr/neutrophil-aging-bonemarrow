@@ -19,7 +19,7 @@
 #' "PCA" / "UMAP" while Seurat stores "pca" / "umap". preprocess_cds()
 #' overwrites PCA immediately afterwards; UMAP is what cluster_cells() and
 #' learn_graph() actually read.
-seurat_to_cds <- function(obj, assay = "RNA") {
+seurat_to_cds <- function(obj, assay = "RNA", copy_reductions = TRUE) {
   counts <- SeuratObject::GetAssayData(obj, assay = assay, layer = "counts")
 
   gene_meta <- data.frame(gene_short_name = rownames(counts),
@@ -29,24 +29,44 @@ seurat_to_cds <- function(obj, assay = "RNA") {
     cell_metadata = obj[[]][colnames(counts), , drop = FALSE],
     gene_metadata = gene_meta)
 
-  for (nm in names(obj@reductions)) {
-    emb <- SeuratObject::Embeddings(obj, reduction = nm)
-    SingleCellExperiment::reducedDims(cds)[[toupper(nm)]] <-
-      emb[colnames(cds), , drop = FALSE]
-  }
+  # Copying Seurat's embeddings is right only when the cds is built from the
+  # same assay they were computed on. learn_graph() and order_cells() both run
+  # on reducedDims "UMAP", so whichever embedding lands here DECIDES the
+  # pseudotime -- swapping the counts underneath it changes nothing.
+  if (copy_reductions)
+    for (nm in names(obj@reductions)) {
+      emb <- SeuratObject::Embeddings(obj, reduction = nm)
+      SingleCellExperiment::reducedDims(cds)[[toupper(nm)]] <-
+        emb[colnames(cds), , drop = FALSE]
+    }
   cds
 }
 
 #' Convert a Seurat object to a monocle3 cell_data_set and preprocess it.
-to_cds <- function(obj, assay = "RNA", num_dim = 50) {
+#' @param recompute_dimred rebuild PCA and UMAP inside monocle3 from this
+#'   assay's counts instead of inheriting Seurat's embeddings. Required
+#'   whenever `assay` is not the assay Seurat reduced: the trajectory is
+#'   learned on the UMAP, so inheriting an embedding built from other counts
+#'   produces a pseudotime those counts had no part in. Defaults to TRUE for
+#'   any assay other than RNA.
+to_cds <- function(obj, assay = "RNA", num_dim = 50,
+                   recompute_dimred = !identical(assay, "RNA"), seed = 42) {
   obj <- join_layers(obj)
-  cds <- if (requireNamespace("SeuratWrappers", quietly = TRUE)) {
+  cds <- if (requireNamespace("SeuratWrappers", quietly = TRUE) &&
+             !recompute_dimred) {
     SeuratWrappers::as.cell_data_set(obj, assay = assay)
   } else {
-    log_step("SeuratWrappers not installed -- converting to a cell_data_set directly")
-    seurat_to_cds(obj, assay = assay)
+    log_step("converting to a cell_data_set directly", 
+             if (recompute_dimred) " (embeddings rebuilt from this assay)" else "")
+    seurat_to_cds(obj, assay = assay, copy_reductions = !recompute_dimred)
   }
   cds <- monocle3::preprocess_cds(cds, num_dim = num_dim)
+  if (recompute_dimred) {
+    set.seed(seed)
+    cds <- monocle3::reduce_dimension(cds, reduction_method = "UMAP",
+                                      preprocess_method = "PCA",
+                                      verbose = FALSE)
+  }
   monocle3::cluster_cells(cds)
 }
 
