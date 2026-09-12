@@ -13,6 +13,7 @@
 #   1 -> 2 -> 3 -+-> 4
 #                +-> 6
 #                +-> 8
+#                +-> 10
 #                +-> 5 -+-> 7
 #                       +-> 9
 #
@@ -83,6 +84,7 @@ resources_for() {
     7) echo "--time=48:00:00 --mem=64G  --cpus-per-task=8" ;;
     8) echo "--time=06:00:00 --mem=32G  --cpus-per-task=4" ;;
     9) echo "--time=02:00:00 --mem=32G  --cpus-per-task=4" ;;
+    10) echo "--time=08:00:00 --mem=48G  --cpus-per-task=4" ;;  # permutation per stratum
   esac
 }
 
@@ -94,6 +96,7 @@ depends_on() {
     3) echo "2" ;;
     4|5|6|8) echo "3" ;;
     7|9) echo "5" ;;
+    10) echo "3" ;;
   esac
 }
 
@@ -162,7 +165,7 @@ fi
 
 declare -A JOB_ID=()
 
-for step in 1 2 3 4 5 6 7 8 9; do
+for step in 1 2 3 4 5 6 7 8 9 10; do
   wanted "$step" || continue
 
   dep_args=""

@@ -18,7 +18,8 @@ steps <- c(
   "6" = "06_age_trends.R",
   "7" = "07_glm_models.R",
   "8" = "08_gsea.R",
-  "9" = "09_development_shifts.R"
+  "9" = "09_development_shifts.R",
+  "10" = "10_endpoint_contrast.R"
 )
 
 args <- commandArgs(trailingOnly = TRUE)

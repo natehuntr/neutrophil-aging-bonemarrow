@@ -195,7 +195,7 @@ depth:
   # Steps that read RNAmatched instead of RNA. Step 5 is listed separately
   # because rebuilding the trajectory on matched counts costs ~3.5 hours and
   # step 9's pseudotime comes from it.
-  matched_steps: [4, 6, 8]
+  matched_steps: [4, 6, 8, 10]
   match_trajectory: true
   # Re-score CytoTRACE2 on the matched counts in step 3. Of everything here it
   # is the measure most directly exposed to depth, since it reads
@@ -349,6 +349,23 @@ stage_assignment:
     preNeu:   [Ltf, Camp, Ngp, Lcn2, Chil3, Fcnb, Mki67]
     immature: [Ltf, Camp, Lcn2, Mmp8, Cd177, Ifitm1, Chil3]
     mature:   [Cxcr2, Sell, Il1b, Csf3r, Mmp9, S100a8, S100a9, Retnlg, Fpr1]
+
+# ---------------------------------------------------------------------------
+# Endpoint contrast (step 10)
+#
+# Discovery at the extremes, shape check in between. The four-age Spearman in
+# step 6 needs every timepoint to clear gates.min_cells_per_stratum, and male
+# 12m holds 24 mature cells, so it retires 8 of 10 stage x sex strata. Using
+# only 3m and 18m for discovery, those same 8 strata clear the gate.
+# ---------------------------------------------------------------------------
+endpoint:
+  reference: 3m
+  endpoint: 18m
+  # Genes below this are not in the stratum to differ across it, and carrying
+  # them only widens the surface the permutation threshold has to cover.
+  min_cells_detected: 10
+  n_perm: 100
+  quantile: 0.95
 
 age_trend:
   rho_cutoff: 0.1
