@@ -149,18 +149,28 @@ build_candidate_table <- function(candidates, cfg) {
   out$orthogonal_assay <- suggest_orthogonal_assay(out$candidate)
   out$gate_min_cells <- out$n_cells_min >= cfg$gates$min_cells_per_stratum
 
+  out$exceeds_null <- out$null_percentile >= cfg$null_model$quantile * 100
+  # Weaker than the MEDIAN random split of a single library. A candidate here
+  # is not a weak candidate, it is one this data actively argues against:
+  # splitting one library at random separates the sexes better than the sexes
+  # do. Ranking these by effect size put the smallest, noisiest stratum at the
+  # top of the list, so they are demoted below everything else outright.
+  out$below_null_floor <- !is.na(out$null_percentile) & out$null_percentile < 50
+
   # Ranked by what should be believed, not by significance: something that
   # resists the confound, sits outside the null and survives depth matching
   # comes first, whatever its nominal effect size.
   out$rank_score <- (as.integer(out$against_bias) * 4) +
-    (as.integer(out$null_percentile >= cfg$null_model$quantile * 100) * 2) +
-    as.integer(out$survives_downsampling %in% TRUE)
+    (as.integer(out$exceeds_null) * 2) +
+    as.integer(out$survives_downsampling %in% TRUE) -
+    (as.integer(out$below_null_floor) * 8)
 
   out <- out[order(-out$rank_score, -abs(out$effect_size)), ]
   out <- out[, c("candidate", "stage", "effect_size", "ci_lower", "ci_upper",
                  "direction", "against_bias", "evidence_tier", "null_percentile",
-                 "survives_downsampling", "n_cells_min", "gate_min_cells",
-                 "orthogonal_assay", "rank_score")]
+                 "exceeds_null", "below_null_floor", "survives_downsampling",
+                 "n_cells_min", "gate_min_cells", "orthogonal_assay",
+                 "rank_score")]
   attr(out, "caveat") <- sex_contrast_caveat(cfg)
   out
 }

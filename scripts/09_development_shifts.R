@@ -48,8 +48,23 @@ require_metadata(gmp_neu, c("stage", "age", "sex"), context = "step 9")
 # this script are within-sex shifts relative to the first age, which cancels a
 # constant depth difference between the two libraries -- but not depth varying
 # between hashtags inside one library.
-depth_by_age <- depth_by_age_within_sex(gmp_neu, cfg)
+# Report on the counts the ANALYSES read. Run against raw RNA this warns
+# about a depth spread that matching has already removed -- the trajectory
+# behind pseudotime, and the potency score, are both built on RNAmatched --
+# so the raw table is written for reference and the verdict comes from the
+# matched one.
+depth_assay <- if ("RNAmatched" %in% assay_names(gmp_neu) &&
+                   isTRUE(cfg$depth$match)) "RNAmatched" else "RNA"
+
+depth_raw <- depth_by_age_within_sex(gmp_neu, cfg, assay = "RNA")
+depth_raw$assay <- "RNA"
+write_table(depth_raw, cfg, "depth_by_age_within_sex_raw.csv")
+
+depth_by_age <- depth_by_age_within_sex(gmp_neu, cfg, assay = depth_assay)
+depth_by_age$assay <- depth_assay
 write_table(depth_by_age, cfg, "depth_by_age_within_sex.csv")
+log_step("depth diagnostic on the ", depth_assay,
+         " assay -- the counts the comparisons below actually read")
 report_depth_by_age(depth_by_age, cfg)
 
 # ===========================================================================

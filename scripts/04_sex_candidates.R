@@ -190,10 +190,28 @@ table_in <- data.frame(
 candidate_table <- build_candidate_table(table_in, cfg)
 write_table(candidate_table, cfg, "sex_candidates.csv")
 
-log_step("top candidates (ranked by what should be believed, not by effect size):")
-print(utils::head(candidate_table[, c("candidate", "stage", "effect_size",
-                                      "evidence_tier", "null_percentile",
-                                      "survives_downsampling", "orthogonal_assay")], 15),
-      row.names = FALSE)
+# Only rows that clear the within-library null belong in a "top candidates"
+# list. A row below the null floor is one the data argues against -- a random
+# split of one library separated the sexes better -- and printing it under
+# that heading is the one thing this table exists not to do. The full ranking,
+# floor rows included, is in the csv.
+believable <- candidate_table[!candidate_table$below_null_floor, ]
+n_floor <- sum(candidate_table$below_null_floor, na.rm = TRUE)
+
+if (nrow(believable)) {
+  log_step("top candidates (ranked by what should be believed, not by effect size):")
+  print(utils::head(believable[, c("candidate", "stage", "effect_size",
+                                   "evidence_tier", "null_percentile",
+                                   "exceeds_null", "survives_downsampling",
+                                   "orthogonal_assay")], 15), row.names = FALSE)
+} else {
+  log_step("NO candidate clears the within-library null floor.")
+  log_step("  Every module scored here separates the sexes less well than a ",
+           "random split of the female library separates its own cells. ",
+           "That is a result: this contrast has nothing to hand an orthogonal ",
+           "assay. See within_library_null.csv for the floors.")
+}
+log_step(n_floor, " of ", nrow(candidate_table),
+         " rows sit below the null floor and are ranked last in the csv.")
 log_step(attr(candidate_table, "caveat"))
 log_step("step 4 complete")
