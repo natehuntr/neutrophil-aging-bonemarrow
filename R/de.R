@@ -555,10 +555,43 @@ age_trend_excess <- function(obj, cfg, age_levels = cfg$analysis$age_levels,
   log_step(sprintf("  %s: |rho| threshold from permutation = %.3f; %d genes exceed it",
                    label, threshold, n_observed))
 
+  # What the permutation null CANNOT protect against.
+  #
+  # Shuffling age labels destroys any association between age and library
+  # complexity, so the null describes a stratum in which complexity does not
+  # trend with age. If it does trend in the real data -- each age is a
+  # separate hashtag, and hashtags differ in how many genes they detect --
+  # then every gene whose detection follows complexity carries that trend into
+  # the observed rho, clears a threshold built without it, and is counted as
+  # signal. A large gene count and a strong detection trend are the same
+  # observation reported twice.
+  detected <- Matrix::colSums(
+    Seurat::GetAssayData(obj, assay = assay, layer = "counts") > 0)
+  numeric_age <- as.numeric(factor(as.character(obj[[age_col]][, 1]),
+                                   levels = age_levels))
+  detection_rho <- suppressWarnings(
+    stats::cor(detected, numeric_age, method = "spearman", use = "complete.obs"))
+
+  if (is.finite(detection_rho) && abs(detection_rho) > threshold)
+    log_step(sprintf(
+      paste0("  %s: WARNING genes detected trends with age at rho = %.3f, above ",
+             "this stratum's own threshold (%.3f). The %d genes above may be ",
+             "that one trend rather than %d independent findings, and ",
+             "permuting age cannot calibrate against it."),
+      label, detection_rho, threshold, n_observed, n_observed))
+  else
+    log_step(sprintf(
+      paste0("  %s: genes detected trends with age at rho = %.3f, below the ",
+             "%.3f threshold, so the gene count is not a complexity trend."),
+      label, detection_rho, threshold))
+
   list(trend = observed,
        null_threshold = threshold,
        null_max = null_max,
        n_exceeding = n_observed,
+       detection_rho = detection_rho,
+       detection_confounded = is.finite(detection_rho) &&
+         abs(detection_rho) > threshold,
        changing_genes = observed[which(abs(observed$rho) > threshold), ],
        n_cells = as.integer(n_by_age))
 }

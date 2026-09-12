@@ -80,7 +80,11 @@ for (stage in cfg$analysis$stage_levels) {
       stage = stage, sex = sex,
       n_cells_min = min(res$n_cells),
       null_threshold = res$null_threshold,
-      n_exceeding_null = res$n_exceeding)
+      n_exceeding_null = res$n_exceeding,
+      # Read these two together. A large gene count next to a detection trend
+      # above the threshold is one observation, not two.
+      detection_rho = res$detection_rho,
+      detection_confounded = res$detection_confounded)
   }
 }
 
