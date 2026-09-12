@@ -151,8 +151,10 @@ survives_matching <- function(observed, matched, tolerance = 0.5) {
 #' shallower than 3m cells in the same library, both measures shift together
 #' and neither is evidence for the other.
 #'
-#' `ratio_to_reference` is each age's median depth over the reference age's,
-#' so 1.0 means the age trend cannot be a depth trend.
+#' `umi_ratio` and `gene_ratio` are each age's median depth and median genes
+#' detected over the reference age's. BOTH have to be near 1.0: genes detected
+#' is the one that matters for complexity-based measures, and it is the one
+#' that moves independently of total counts.
 depth_by_age_within_sex <- function(obj, cfg, assay = "RNA",
                                     age_col = "age", sex_col = "sex",
                                     age_levels = cfg$analysis$age_levels) {
@@ -176,7 +178,13 @@ depth_by_age_within_sex <- function(obj, cfg, assay = "RNA",
       row.names = NULL, stringsAsFactors = FALSE)
     # The reference is the first configured age present, matching how the
     # pseudotime and potency shifts are anchored.
-    tbl$ratio_to_reference <- tbl$median_umi / tbl$median_umi[1]
+    tbl$umi_ratio <- tbl$median_umi / tbl$median_umi[1]
+    # Genes detected, not just total UMIs. CytoTRACE2 and pseudotime position
+    # track transcriptional COMPLEXITY, and complexity is the gene count. The
+    # two ratios come apart badly here -- a library can hold total counts
+    # steady while detecting far more distinct genes -- so gating on UMIs
+    # alone passes strata that are not comparable at all.
+    tbl$gene_ratio <- tbl$median_genes / tbl$median_genes[1]
     tbl
   })
 
@@ -191,23 +199,37 @@ report_depth_by_age <- function(tbl, cfg) {
   log_step("sequencing depth by age, within each sex ",
            "(each age is a separate hashtag in the same library):")
   print(tbl[, c("sex", "age", "n_cells", "median_umi", "median_genes",
-                "ratio_to_reference")], row.names = FALSE)
+                "umi_ratio", "gene_ratio")], row.names = FALSE)
 
-  worst <- tbl[which.max(abs(log(tbl$ratio_to_reference))), ]
-  spread <- max(tbl$ratio_to_reference) / min(tbl$ratio_to_reference)
-  if (spread > limit) {
+  # Spread WITHIN each library, on both measures. Verdict takes the worse:
+  # passing on counts while failing on complexity is not a pass.
+  spread_of <- function(column) {
+    vapply(split(tbl[[column]], tbl$sex),
+           function(x) max(x) / min(x), numeric(1))
+  }
+  umi <- spread_of("umi_ratio")
+  genes <- spread_of("gene_ratio")
+
+  log_step("  spread across ages within each library:")
+  for (sx in names(umi))
+    log_step(sprintf("    %-7s UMIs %.2fx   genes detected %.2fx%s",
+                     sx, umi[[sx]], genes[[sx]],
+                     if (max(umi[[sx]], genes[[sx]]) > limit) "   <- over limit" else ""))
+
+  worst <- max(c(umi, genes))
+  if (worst > limit) {
+    failing <- if (max(genes) > limit && max(umi) <= limit)
+      "genes detected, while total UMIs look flat" else "depth"
     log_step(sprintf(
-      "  WARNING: depth varies %.2fx across ages within a library (limit %.2fx); ",
-      spread, limit),
-      sprintf("worst is %s %s at %.2fx the %s reference.",
-              worst$sex, worst$age, worst$ratio_to_reference, worst$reference_age))
+      "  WARNING: %s varies up to %.2fx across ages within a library (limit %.2fx).",
+      failing, worst, limit))
     log_step("  Pseudotime position and CytoTRACE2 potency both track ",
              "transcriptional complexity, so an age trend in either could be ",
-             "this depth trend. They do not corroborate each other while this holds.")
+             "this trend. They do not corroborate each other while this holds.")
   } else {
     log_step(sprintf(
-      "  depth varies only %.2fx across ages within a library (limit %.2fx): ",
-      spread, limit),
+      "  both measures vary at most %.2fx across ages within a library (limit %.2fx): ",
+      worst, limit),
       "the within-sex age trends are not explained by a depth trend.")
   }
   invisible(tbl)
