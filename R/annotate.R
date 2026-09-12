@@ -157,9 +157,10 @@ Steps 4 and 7 select cells on that column, so the pipeline cannot ",
 
 #' Marker modules for the granulocyte maturation series.
 NEUTROPHIL_MODULES <- list(
+  # proNeu2 merged in; see analysis.stage_levels in the config.
   proNeu  = c("Elane", "Mpo", "Prtn3", "Ctsg", "Ms4a3", "Cebpe", "Gfi1",
-              "Fcnb", "Rab44", "Nkg7", "Plac8", "Cd34", "Kit", "Srgn"),
-  proNeu2 = c("Il5ra", "Cebpe", "Fcnb", "Ltf", "Camp", "Mki67"),
+              "Fcnb", "Rab44", "Nkg7", "Plac8", "Cd34", "Kit", "Srgn",
+              "Il5ra"),
   preNeu  = c("Ltf", "Camp", "Ngp", "Lcn2", "Chil3", "Cebpe", "Fcnb",
               "Anxa1", "Hp", "Ifitm6", "Mki67"),
   immNeu  = c("Ltf", "Camp", "Lcn2", "Mmp8", "Cd177", "Ifitm1",

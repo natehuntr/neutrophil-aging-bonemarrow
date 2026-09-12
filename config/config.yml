@@ -268,7 +268,12 @@ analysis:
   # factor. Keyed by the labels above.
   age_months: {3m: 3, 9m: 9, 12m: 12, 18m: 18}
   sex_levels: [female, male]
-  stage_levels: [GMPs, proNeu, proNeu2, preNeu, immature, mature]
+  # proNeu2 is merged into proNeu. Neither modality could separate them: the
+  # ADT panel lacks CD101, and the RNA signatures put only 3 of 4512 cells in
+  # proNeu2 because its markers overlap proNeu and preNeu almost completely.
+  # A stage that exists in the config and not in the data fails every gate and
+  # forces a skip in every stratified step.
+  stage_levels: [GMPs, proNeu, preNeu, immature, mature]
 
 # ---------------------------------------------------------------------------
 # Stage assignment
@@ -307,7 +312,6 @@ stage_assignment:
   adt_panels:
     GMPs:     {high: [Ms.CD117], low: [Ms.Ly.6G, Ms.CD11b]}
     proNeu:   {high: [Ms.CD117, Ms.CD11b], low: [Ms.Ly.6G]}
-    proNeu2:  {high: [Ms.CD11b], low: [Ms.Ly.6G, Ms.CD101]}
     preNeu:   {high: [Ms.Ly.6G, Ms.CD11b], low: [Ms.CD101, Ms.CXCR2]}
     immature: {high: [Ms.Ly.6G, Ms.CD101], low: [Ms.CXCR2]}
     mature:   {high: [Ms.Ly.6G, Ms.CD101, Ms.CXCR2, Ms.CD177], low: []}
@@ -323,8 +327,10 @@ stage_assignment:
   # RNA signatures for method: markers, and for scoring regardless of method.
   rna_signatures:
     GMPs:     [Elane, Mpo, Prtn3, Ctsg, Ms4a3, Kit, Cd34]
-    proNeu:   [Elane, Mpo, Prtn3, Ctsg, Cebpe, Gfi1, Fcnb]
-    proNeu2:  [Il5ra, Cebpe, Fcnb, Ltf, Camp, Mki67]
+    # proNeu + proNeu2. Of proNeu2's markers only Il5ra is carried over:
+    # Ltf, Camp and Mki67 are preNeu markers, so adding them would blur the
+    # boundary this signature has to hold.
+    proNeu:   [Elane, Mpo, Prtn3, Ctsg, Cebpe, Gfi1, Fcnb, Il5ra]
     preNeu:   [Ltf, Camp, Ngp, Lcn2, Chil3, Fcnb, Mki67]
     immature: [Ltf, Camp, Lcn2, Mmp8, Cd177, Ifitm1, Chil3]
     mature:   [Cxcr2, Sell, Il1b, Csf3r, Mmp9, S100a8, S100a9, Retnlg, Fpr1]
@@ -353,6 +359,12 @@ gsea:
   # simply higher in immature cells shows an age trend in the pooled data
   # while changing within neither stage.
   stages: [mature, immature]
+  # 9m is dropped HERE ONLY. This contrast needs a per-sex age trend within a
+  # single stage, and the 9m male strata hold 20 (mature) and 22 (immature)
+  # cells -- below gates.min_cells_per_stratum, so every stage was skipped and
+  # the step produced nothing twice. The other steps use all four ages; this
+  # is a cell-count fact about one contrast, not a weakened threshold.
+  age_levels: [3m, 12m, 18m]
   min_pct_cells: 0.05
   min_set_size: 15
   max_set_size: 500

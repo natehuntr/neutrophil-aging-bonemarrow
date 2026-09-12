@@ -140,3 +140,75 @@ survives_matching <- function(observed, matched, tolerance = 0.5) {
   if (sign(observed) != sign(matched)) return("sign-flip")
   abs(matched) >= tolerance * abs(observed)
 }
+
+#' Depth per age WITHIN each sex, and how far it varies.
+#'
+#' The within-sex age comparisons in step 9 are shifts relative to the first
+#' age, so a constant depth difference between the two libraries cancels. What
+#' does not cancel is depth varying BETWEEN HASHTAGS INSIDE one library: each
+#' age is a separate hashtag in the same run, and both pseudotime position and
+#' CytoTRACE2 potency track transcriptional complexity. If 18m cells are
+#' shallower than 3m cells in the same library, both measures shift together
+#' and neither is evidence for the other.
+#'
+#' `ratio_to_reference` is each age's median depth over the reference age's,
+#' so 1.0 means the age trend cannot be a depth trend.
+depth_by_age_within_sex <- function(obj, cfg, assay = "RNA",
+                                    age_col = "age", sex_col = "sex",
+                                    age_levels = cfg$analysis$age_levels) {
+  counts <- Seurat::GetAssayData(obj, assay = assay, layer = "counts")
+  totals <- Matrix::colSums(counts)
+  detected <- Matrix::colSums(counts > 0)
+
+  age <- as.character(obj[[age_col]][, 1])
+  sex <- as.character(obj[[sex_col]][, 1])
+  keep <- !is.na(age) & !is.na(sex) & age %in% age_levels
+
+  rows <- lapply(split(which(keep), sex[keep]), function(idx) {
+    by_age <- split(idx, factor(age[idx], levels = age_levels))
+    by_age <- by_age[lengths(by_age) > 0]
+    tbl <- data.frame(
+      sex = sex[idx][1],
+      age = names(by_age),
+      n_cells = vapply(by_age, length, integer(1)),
+      median_umi = vapply(by_age, function(i) stats::median(totals[i]), numeric(1)),
+      median_genes = vapply(by_age, function(i) stats::median(detected[i]), numeric(1)),
+      row.names = NULL, stringsAsFactors = FALSE)
+    # The reference is the first configured age present, matching how the
+    # pseudotime and potency shifts are anchored.
+    tbl$ratio_to_reference <- tbl$median_umi / tbl$median_umi[1]
+    tbl
+  })
+
+  out <- do.call(rbind, c(rows, list(make.row.names = FALSE)))
+  out$reference_age <- out$age[1]
+  out
+}
+
+#' Report the depth-by-age table and say plainly what it implies.
+report_depth_by_age <- function(tbl, cfg) {
+  limit <- cfg$gates$max_depth_ratio %||% 1.3
+  log_step("sequencing depth by age, within each sex ",
+           "(each age is a separate hashtag in the same library):")
+  print(tbl[, c("sex", "age", "n_cells", "median_umi", "median_genes",
+                "ratio_to_reference")], row.names = FALSE)
+
+  worst <- tbl[which.max(abs(log(tbl$ratio_to_reference))), ]
+  spread <- max(tbl$ratio_to_reference) / min(tbl$ratio_to_reference)
+  if (spread > limit) {
+    log_step(sprintf(
+      "  WARNING: depth varies %.2fx across ages within a library (limit %.2fx); ",
+      spread, limit),
+      sprintf("worst is %s %s at %.2fx the %s reference.",
+              worst$sex, worst$age, worst$ratio_to_reference, worst$reference_age))
+    log_step("  Pseudotime position and CytoTRACE2 potency both track ",
+             "transcriptional complexity, so an age trend in either could be ",
+             "this depth trend. They do not corroborate each other while this holds.")
+  } else {
+    log_step(sprintf(
+      "  depth varies only %.2fx across ages within a library (limit %.2fx): ",
+      spread, limit),
+      "the within-sex age trends are not explained by a depth trend.")
+  }
+  invisible(tbl)
+}

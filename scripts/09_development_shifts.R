@@ -26,6 +26,7 @@
 # Writes: results/tables/stage_composition.csv, stage_age_trends.csv,
 #         stage_composition_clr.csv, stage_sex_differences.csv,
 #         pseudotime_shifts.csv, potency_shifts.csv (+ their summaries)
+#         results/tables/depth_by_age_within_sex.csv
 #         results/figures/stage_composition.pdf, stage_trends.pdf,
 #         pseudotime_by_age.pdf, potency_by_age.pdf
 # ---------------------------------------------------------------------------
@@ -39,6 +40,17 @@ load_modules()
 age_levels <- cfg$analysis$age_levels
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
 require_metadata(gmp_neu, c("stage", "age", "sex"), context = "step 9")
+
+# ===========================================================================
+# 0. Depth by age, within each sex
+# ===========================================================================
+# This qualifies everything below it, so it runs first. Both comparisons in
+# this script are within-sex shifts relative to the first age, which cancels a
+# constant depth difference between the two libraries -- but not depth varying
+# between hashtags inside one library.
+depth_by_age <- depth_by_age_within_sex(gmp_neu, cfg)
+write_table(depth_by_age, cfg, "depth_by_age_within_sex.csv")
+report_depth_by_age(depth_by_age, cfg)
 
 # ===========================================================================
 # A. Stage composition
@@ -107,9 +119,11 @@ if (!file.exists(object_path(cfg, "combined_cds.rds"))) {
   save_figure(plot_distribution_by_age(pt, meta, cfg, xlab = "Pseudotime"),
               cfg, "pseudotime_by_age.pdf", width = 9, height = 8)
 
-  # The same question asked of CytoTRACE2 potency, which is independent of the
-  # trajectory fit: if both move the same way, the shift is not an artefact of
-  # where the trajectory root landed.
+  # The same question asked of CytoTRACE2 potency. This is independent of the
+  # TRAJECTORY FIT, so agreement rules out an artefact of where the root
+  # landed -- but it is not an independent measurement: both run on the same
+  # counts and both track transcriptional complexity, so both move with depth.
+  # Section 0 is what says whether that shared vulnerability is live here.
   potency <- SummarizedExperiment::colData(combined_cds)$CytoTRACE2_Score
   if (!is.null(potency) && any(is.finite(potency))) {
     log_step("=== potency (CytoTRACE2) ===")

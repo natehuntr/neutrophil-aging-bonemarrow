@@ -33,7 +33,8 @@ cfg <- init_project()
 load_modules()
 require_packages("fgsea", "msigdbr")
 
-age_levels <- cfg$analysis$age_levels
+# gsea.age_levels narrows the ages for THIS contrast only; see the config.
+age_levels <- cfg$gsea$age_levels %||% cfg$analysis$age_levels
 args <- commandArgs(trailingOnly = TRUE)
 stages <- if (length(args)) args else cfg$gsea$stages
 
@@ -45,7 +46,7 @@ for (stage in stages) {
 
   neus <- select_cells(gmp_neu, list(
     "stage is this stage"     = as.character(gmp_neu$stage) == stage,
-    "age is one of analysis.age_levels" = gmp_neu$age %in% age_levels
+    "age is one of gsea.age_levels"  = gmp_neu$age %in% age_levels
   ), context = paste(stage, "neutrophils"))
 
   group_sizes <- table(neus$sex, neus$age)
