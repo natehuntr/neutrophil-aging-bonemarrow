@@ -301,3 +301,54 @@ compare_across_ages_by_sex <- function(values, meta, cfg,
   list(summary = do.call(rbind, summaries),
        shifts = do.call(rbind, shifts))
 }
+
+#' The same age comparison, run separately WITHIN each maturation stage.
+#'
+#' Pooled across stages, both pseudotime and potency move whenever the stage
+#' mix moves -- and it does: the male GMP fraction goes from 29% at 3m to 43%
+#' at 18m, and GMPs are high-potency and early in pseudotime by construction.
+#' A pooled shift is therefore consistent with no cell changing at all.
+#'
+#' Run within a stage, the question becomes whether cells AT THAT STAGE sit
+#' earlier or score higher with age, which is a claim about the cells rather
+#' than about their proportions. The two together separate composition from
+#' position: a pooled shift with no within-stage shift is a composition
+#' result, and a within-stage shift is not.
+compare_across_ages_within_stage <- function(values, meta, cfg,
+                                             stage_col = "stage",
+                                             age_levels = cfg$analysis$age_levels,
+                                             min_cells = cfg$gates$min_cells_per_stratum) {
+  if (!stage_col %in% names(meta)) {
+    log_step("no ", stage_col, " column; skipping the within-stage comparison")
+    return(NULL)
+  }
+  stages <- intersect(cfg$analysis$stage_levels, unique(as.character(meta[[stage_col]])))
+  summaries <- list()
+  shifts <- list()
+
+  for (st in stages) {
+    keep <- !is.na(meta[[stage_col]]) & as.character(meta[[stage_col]]) == st
+    # Checked per age, not in total: a stage with 400 cells at one age and 12
+    # at another cannot support a shift between them.
+    by_age <- table(as.character(meta$age[keep]))
+    by_age <- by_age[intersect(age_levels, names(by_age))]
+    if (!length(by_age) || min(by_age) < min_cells) {
+      log_step("  skipping ", st, ": smallest age has ",
+               if (length(by_age)) min(by_age) else 0, " cells (gate is ",
+               min_cells, ")")
+      next
+    }
+    log_step("  --- ", st, " ---")
+    res <- compare_across_ages_by_sex(values[keep], meta[keep, , drop = FALSE], cfg,
+                                      age_levels = age_levels)
+    if (!is.null(res$summary)) { res$summary$stage <- st; summaries[[st]] <- res$summary }
+    if (!is.null(res$shifts))  { res$shifts$stage  <- st; shifts[[st]]    <- res$shifts }
+  }
+
+  if (!length(shifts)) {
+    log_step("  no stage had enough cells at every age for a within-stage comparison")
+    return(NULL)
+  }
+  list(summary = do.call(rbind, c(summaries, list(make.row.names = FALSE))),
+       shifts  = do.call(rbind, c(shifts, list(make.row.names = FALSE))))
+}

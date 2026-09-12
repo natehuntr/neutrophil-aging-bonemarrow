@@ -131,7 +131,8 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
   log_step(sprintf("  %s: permutation threshold %.4f; %d of %d genes exceed it",
                    label, threshold, length(hits), length(effect)))
   if (!length(hits)) return(list(threshold = threshold, null_max = null_max,
-                                 genes = NULL, n_by_age = n_by_age))
+                                 effect = effect, genes = NULL,
+                                 n_by_age = n_by_age))
 
   shape <- interpolation_profile(expr, ages, hits, cfg,
                                  reference = reference, endpoint = endpoint)
@@ -147,6 +148,55 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
            paste(sprintf("%s %d", names(table(shape$shape)), table(shape$shape)),
                  collapse = ", "))
 
-  list(threshold = threshold, null_max = null_max, genes = shape,
-       n_by_age = n_by_age)
+  # The FULL effect vector, not just the hits: preranked GSEA reads the whole
+  # ranking, and a pathway can be enriched without any single member gene
+  # clearing a family-wise threshold built from the maximum across genes.
+  list(threshold = threshold, null_max = null_max, effect = effect,
+       genes = shape, n_by_age = n_by_age)
+}
+
+#' Preranked GSEA over the endpoint effect, for one stratum.
+#'
+#' Ranked by the 3m -> 18m difference, so a positive NES means the set moves up
+#' with age in this stage and sex. This asks a different question from the
+#' gene table above: coordinated movement across a set survives noise that no
+#' individual gene survives, which is why it is worth running even where the
+#' per-gene list is short.
+endpoint_gsea <- function(effect, cfg, label = "") {
+  require_packages("fgsea", "msigdbr")
+  ranks <- sort(effect[is.finite(effect)], decreasing = TRUE)
+  if (length(ranks) < cfg$gsea$min_set_size * 2) {
+    log_step("  ", label, ": only ", length(ranks), " ranked genes; skipping GSEA")
+    return(NULL)
+  }
+
+  pathways <- gobp_pathways(names(ranks), cfg)
+  pathways <- pathways[lengths(pathways) <= cfg$gsea$max_set_size]
+  if (!length(pathways)) {
+    log_step("  ", label, ": no gene set survived the size filters")
+    return(NULL)
+  }
+
+  res <- fgsea::fgseaMultilevel(pathways, ranks,
+                                minSize = cfg$gsea$min_set_size,
+                                maxSize = cfg$gsea$max_set_size, eps = 0)
+  res <- res[order(res$pval), ]
+
+  sig <- res[which(res$padj < 0.05), ]
+  # GO:BP is heavily redundant; without collapsing, one signal is reported as
+  # thirty nested pathways and reads as thirty findings.
+  main <- if (nrow(sig) > 0) fgsea::collapsePathways(sig, pathways, ranks)
+          else list(mainPathways = character(0))
+
+  out <- tibble::as_tibble(res)
+  out$independent <- out$pathway %in% main$mainPathways
+  out$direction <- ifelse(out$NES > 0, paste0("up at ", cfg$endpoint$endpoint),
+                          paste0("down at ", cfg$endpoint$endpoint))
+  out$leadingEdge_n <- lengths(out$leadingEdge)
+  out$leadingEdge <- vapply(out$leadingEdge, paste, character(1), collapse = ";")
+  out$orthogonal_assay <- suggest_orthogonal_assay(out$pathway)
+
+  log_step(sprintf("  %s: %d pathways at padj < 0.05, %d independent after collapsing",
+                   label, nrow(sig), sum(out$independent)))
+  out
 }

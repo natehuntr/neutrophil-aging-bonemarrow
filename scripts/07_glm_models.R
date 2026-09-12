@@ -40,6 +40,7 @@ n_perm <- cfg$glm_de$n_perm
 # Part A - cell-level omnibus test
 # ===========================================================================
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
+glm_assay <- matched_assay_for(gmp_neu, cfg, step = 7)
 
 require_metadata(gmp_neu, c("CytoTRACE2_Potency", "age", "sex"), context = "step 7")
 
@@ -48,13 +49,13 @@ neus <- select_cells(gmp_neu, list(
   "age is one of analysis.age_levels"    = gmp_neu$age %in% age_levels
 ), context = "differentiated neutrophils")
 neus <- join_layers(neus)
-Seurat::DefaultAssay(neus) <- "RNA"
+Seurat::DefaultAssay(neus) <- glm_assay
 
 meta <- neus@meta.data[, c("age", "sex")]
 meta$age <- factor(as.character(meta$age), levels = age_levels)
 meta$sex <- factor(as.character(meta$sex), levels = cfg$analysis$sex_levels)
 
-counts <- Seurat::GetAssayData(neus, assay = "RNA", layer = "counts")
+counts <- Seurat::GetAssayData(neus, assay = glm_assay, layer = "counts")
 ok <- !is.na(meta$age) & !is.na(meta$sex)
 counts <- counts[, ok]
 meta <- droplevels(meta[ok, ])

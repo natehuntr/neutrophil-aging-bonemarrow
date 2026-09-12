@@ -22,6 +22,7 @@
 #
 # Reads:  results/objects/gmp_neutrophils.rds
 # Writes: results/tables/endpoint_<stage>_<sex>.csv
+#         results/tables/endpoint_gsea_<stage>_<sex>.csv
 #         results/tables/endpoint_summary.csv
 # ---------------------------------------------------------------------------
 
@@ -67,6 +68,25 @@ for (stage in cfg$analysis$stage_levels) {
                   sprintf("endpoint_%s_%s.csv", stage, sex))
     }
 
+    # Set-level enrichment over the FULL ranking, not just the genes above the
+    # threshold. Step 8's interaction GSEA needs a per-sex trend across ages
+    # and cannot run in these strata at all; this one only needs the two
+    # endpoints, so it covers every stratum the discovery contrast covers.
+    gsea <- endpoint_gsea(res$effect, cfg, label = label)
+    n_paths <- 0L
+    if (!is.null(gsea) && nrow(gsea)) {
+      gsea$stage <- stage
+      gsea$sex <- sex
+      write_table(strip_inferential_columns(gsea, keep = "padj"), cfg,
+                  sprintf("endpoint_gsea_%s_%s.csv", stage, sex))
+      top <- gsea[which(gsea$padj < 0.05 & gsea$independent), ]
+      n_paths <- nrow(top)
+      if (n_paths)
+        print(utils::head(as.data.frame(
+          top[, c("pathway", "NES", "padj", "direction", "leadingEdge_n",
+                  "orthogonal_assay")]), 10), row.names = FALSE)
+    }
+
     summary_rows[[label]] <- data.frame(
       stage = stage, sex = sex,
       n_reference = as.integer(res$n_by_age[reference] %||% 0L),
@@ -74,6 +94,7 @@ for (stage in cfg$analysis$stage_levels) {
       permutation_threshold = res$threshold,
       n_genes = n_hits,
       n_monotonic = as.integer(shapes["monotonic"] %||% 0L),
+      n_pathways = n_paths,
       row.names = NULL)
   }
 }

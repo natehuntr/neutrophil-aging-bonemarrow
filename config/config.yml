@@ -195,7 +195,7 @@ depth:
   # Steps that read RNAmatched instead of RNA. Step 5 is listed separately
   # because rebuilding the trajectory on matched counts costs ~3.5 hours and
   # step 9's pseudotime comes from it.
-  matched_steps: [4, 6, 8, 10]
+  matched_steps: [4, 6, 7, 8, 10]
   match_trajectory: true
   # Re-score CytoTRACE2 on the matched counts in step 3. Of everything here it
   # is the measure most directly exposed to depth, since it reads
@@ -381,7 +381,11 @@ permutation_de:
 
 glm_de:
   min_cells_detected: 10
-  n_perm: 50
+  # Every model is refit n_perm times, which is what makes step 7 the longest
+  # in the pipeline by a wide margin. At 50 it does not finish overnight, and
+  # an unfinished step 7 yields nothing at all; 20 gives a coarser but usable
+  # null in roughly half the time. Raise it once a first pass has run.
+  n_perm: 20
   target_fdr: 0.05
   pt_spline_df: 3
 

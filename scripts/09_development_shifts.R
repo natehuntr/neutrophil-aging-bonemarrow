@@ -118,7 +118,7 @@ if (!file.exists(object_path(cfg, "combined_cds.rds"))) {
   cd <- SummarizedExperiment::colData(combined_cds)
 
   meta <- data.frame(age = as.character(cd$age), sex = as.character(cd$sex),
-                     stringsAsFactors = FALSE)
+                     stage = as.character(cd$stage), stringsAsFactors = FALSE)
   pt <- monocle3::pseudotime(combined_cds)
 
   pt_result <- compare_across_ages_by_sex(pt, meta, cfg)
@@ -133,6 +133,18 @@ if (!file.exists(object_path(cfg, "combined_cds.rds"))) {
 
   save_figure(plot_distribution_by_age(pt, meta, cfg, xlab = "Pseudotime"),
               cfg, "pseudotime_by_age.pdf", width = 9, height = 8)
+
+  # Pooled, the shift above moves with the stage mix. Within stage, it is a
+  # claim about cells. Read the two together.
+  log_step("--- pseudotime WITHIN stage ---")
+  pt_stage <- compare_across_ages_within_stage(pt, meta, cfg)
+  if (!is.null(pt_stage)) {
+    write_table(pt_stage$shifts, cfg, "pseudotime_shifts_within_stage.csv")
+    write_table(pt_stage$summary, cfg, "pseudotime_summary_within_stage.csv")
+    log_step("pseudotime shift relative to ", age_levels[1], ", within stage:")
+    print(pt_stage$shifts[, c("stage", "sex", "group", "n", "median_shift",
+                              "wasserstein", "ks_padj")], row.names = FALSE)
+  }
 
   # The same question asked of CytoTRACE2 potency. This is independent of the
   # TRAJECTORY FIT, so agreement rules out an artefact of where the root
@@ -158,6 +170,18 @@ if (!file.exists(object_path(cfg, "combined_cds.rds"))) {
     save_figure(plot_distribution_by_age(as.numeric(potency), meta, cfg,
                                          xlab = "CytoTRACE2 potency score"),
                 cfg, "potency_by_age.pdf", width = 9, height = 8)
+
+    # GMPs are high-potency by construction, so a rising GMP fraction raises
+    # pooled potency with no cell changing. This is the version that cannot.
+    log_step("--- potency WITHIN stage ---")
+    pot_stage <- compare_across_ages_within_stage(as.numeric(potency), meta, cfg)
+    if (!is.null(pot_stage)) {
+      write_table(pot_stage$shifts, cfg, "potency_shifts_within_stage.csv")
+      write_table(pot_stage$summary, cfg, "potency_summary_within_stage.csv")
+      log_step("potency shift relative to ", age_levels[1], ", within stage:")
+      print(pot_stage$shifts[, c("stage", "sex", "group", "n", "median_shift",
+                                 "wasserstein", "ks_padj")], row.names = FALSE)
+    }
   } else {
     log_step("no CytoTRACE2_Score in the cds -- skipping the potency comparison")
   }
