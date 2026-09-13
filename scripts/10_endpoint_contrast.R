@@ -92,7 +92,10 @@ for (stage in cfg$analysis$stage_levels) {
       n_reference = as.integer(res$n_by_age[reference] %||% 0L),
       n_endpoint = as.integer(res$n_by_age[endpoint] %||% 0L),
       permutation_threshold = res$threshold,
+      fwer_threshold = res$fwer_threshold,
+      fdr_threshold = res$fdr_threshold,
       n_genes = n_hits,
+      n_familywise = if (n_hits) sum(res$genes$passes_familywise) else 0L,
       n_monotonic = as.integer(shapes["monotonic"] %||% 0L),
       n_pathways = n_paths,
       row.names = NULL)

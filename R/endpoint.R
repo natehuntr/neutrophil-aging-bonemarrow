@@ -26,8 +26,13 @@ group_means <- function(expr, groups, levels = NULL) {
     if (!length(idx)) return(rep(NA_real_, nrow(expr)))
     Matrix::rowMeans(expr[, idx, drop = FALSE])
   }, numeric(nrow(expr)))
-  rownames(out) <- rownames(expr)
-  out
+
+  # vapply drops to a plain vector when FUN.VALUE has length 1, i.e. whenever
+  # exactly one gene is passed in -- which is what happens when the discovery
+  # contrast finds a single hit. Rebuilding the matrix explicitly keeps the
+  # shape the same for one gene and for ten thousand.
+  matrix(out, nrow = nrow(expr), ncol = length(levels),
+         dimnames = list(rownames(expr), levels))
 }
 
 #' Per-gene difference in mean normalised expression between two groups.
@@ -47,11 +52,47 @@ endpoint_null <- function(expr, groups, reference, endpoint,
   sub <- expr[, keep, drop = FALSE]
   labels <- groups[keep]
 
-  vapply(seq_len(n_perm), function(i) {
+  # The FULL per-gene null, not just its maximum. The maximum gives a
+  # family-wise threshold, which on 8524 genes in a 103-vs-61 stratum lands at
+  # 0.80 and admits one gene -- correct, and useless for generating
+  # hypotheses. Keeping every permuted effect allows a false-discovery
+  # threshold as well, and the two are reported side by side.
+  perms <- vapply(seq_len(n_perm), function(i) {
     set.seed(seed + i)
-    max(abs(endpoint_effect(sub, sample(labels), reference, endpoint)),
-        na.rm = TRUE)
-  }, numeric(1))
+    abs(endpoint_effect(sub, sample(labels), reference, endpoint))
+  }, numeric(nrow(sub)))
+
+  matrix(perms, nrow = nrow(sub), ncol = n_perm,
+         dimnames = list(rownames(sub), NULL))
+}
+
+#' Smallest threshold whose expected false-discovery proportion is at or below
+#' `target`.
+#'
+#' At each candidate cutoff, the permutations say how many genes clear it when
+#' the labels mean nothing; the observed data says how many clear it in fact.
+#' Their ratio is the expected proportion of the selected list that is noise.
+#' This is the same logic as a family-wise threshold with the tolerance moved
+#' from "one false positive anywhere" to "this fraction of the list", which is
+#' the right trade when the list is a set of hypotheses to test at the bench.
+permutation_fdr_threshold <- function(observed, perms, target = 0.05,
+                                      n_steps = 200) {
+  observed <- abs(observed[is.finite(observed)])
+  if (!length(observed) || !length(perms)) return(NA_real_)
+
+  grid <- stats::quantile(observed, seq(0.5, 1, length.out = n_steps),
+                          names = FALSE, na.rm = TRUE)
+  grid <- sort(unique(grid[is.finite(grid)]))
+  if (!length(grid)) return(NA_real_)
+
+  n_perm <- ncol(perms)
+  for (t in grid) {
+    n_obs <- sum(observed > t)
+    if (!n_obs) next
+    expected_fp <- sum(perms > t, na.rm = TRUE) / n_perm
+    if (expected_fp / n_obs <= target) return(t)
+  }
+  NA_real_
 }
 
 #' Where each intermediate age sits on the 3m -> 18m line, per gene.
@@ -123,14 +164,30 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
                    cfg$endpoint$min_cells_detected))
 
   effect <- endpoint_effect(expr, ages, reference, endpoint)
-  null_max <- endpoint_null(expr, ages, reference, endpoint, n_perm, cfg$seed)
-  threshold <- stats::quantile(null_max, cfg$endpoint$quantile %||% 0.95,
-                               names = FALSE, na.rm = TRUE)
+  perms <- endpoint_null(expr, ages, reference, endpoint, n_perm, cfg$seed)
+
+  # Family-wise: the largest difference the permuted labels produce anywhere.
+  null_max <- apply(perms, 2, max, na.rm = TRUE)
+  fwer_threshold <- stats::quantile(null_max, cfg$endpoint$quantile %||% 0.95,
+                                    names = FALSE, na.rm = TRUE)
+  # False-discovery: the tolerance that fits what this list is for.
+  target <- cfg$endpoint$target_fdr %||% 0.05
+  fdr_threshold <- permutation_fdr_threshold(effect, perms, target)
+
+  # Select on FDR when it is defined; fall back to family-wise when no cutoff
+  # reaches the target, which means the stratum has nothing separable.
+  use_fdr <- is.finite(fdr_threshold)
+  threshold <- if (use_fdr) fdr_threshold else fwer_threshold
 
   hits <- names(which(abs(effect) > threshold))
-  log_step(sprintf("  %s: permutation threshold %.4f; %d of %d genes exceed it",
-                   label, threshold, length(hits), length(effect)))
+  log_step(sprintf(
+    "  %s: FDR %.0f%% threshold %s (family-wise would be %.4f); %d of %d genes exceed it",
+    label, 100 * target,
+    if (use_fdr) sprintf("%.4f", fdr_threshold) else "not reachable, using family-wise",
+    fwer_threshold, length(hits), length(effect)))
   if (!length(hits)) return(list(threshold = threshold, null_max = null_max,
+                                 fwer_threshold = fwer_threshold,
+                                 fdr_threshold = fdr_threshold,
                                  effect = effect, genes = NULL,
                                  n_by_age = n_by_age))
 
@@ -140,6 +197,9 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
   shape$direction <- ifelse(shape$effect > 0,
                             paste0("up at ", endpoint), paste0("down at ", endpoint))
   shape$excess_over_null <- abs(shape$effect) - threshold
+  # Which genes would also survive family-wise control: a much stronger claim
+  # than clearing the FDR cutoff, worth carrying so the shortlist is visible.
+  shape$passes_familywise <- abs(shape$effect) > fwer_threshold
 
   # Monotonic first: same discovery evidence, better-behaved across the ages
   # the contrast never used.
@@ -151,8 +211,9 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
   # The FULL effect vector, not just the hits: preranked GSEA reads the whole
   # ranking, and a pathway can be enriched without any single member gene
   # clearing a family-wise threshold built from the maximum across genes.
-  list(threshold = threshold, null_max = null_max, effect = effect,
-       genes = shape, n_by_age = n_by_age)
+  list(threshold = threshold, null_max = null_max,
+       fwer_threshold = fwer_threshold, fdr_threshold = fdr_threshold,
+       effect = effect, genes = shape, n_by_age = n_by_age)
 }
 
 #' Preranked GSEA over the endpoint effect, for one stratum.

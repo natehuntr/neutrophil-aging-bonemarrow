@@ -365,7 +365,15 @@ endpoint:
   # them only widens the surface the permutation threshold has to cover.
   min_cells_detected: 10
   n_perm: 100
+  # Family-wise cutoff, reported alongside and used only if the FDR target is
+  # unreachable: the 95th percentile of the largest permuted difference.
   quantile: 0.95
+  # What the gene list is selected on. Family-wise control over 8500 genes in
+  # a 103-vs-61 stratum put the cutoff at 0.80 and returned one gene -- right,
+  # and no use for generating hypotheses. 0.10 means roughly one in ten of the
+  # list is expected to be noise, which is the correct trade for a shortlist
+  # that gets tested at the bench.
+  target_fdr: 0.10
 
 age_trend:
   rho_cutoff: 0.1
