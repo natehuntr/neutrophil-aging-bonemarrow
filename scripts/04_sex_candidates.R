@@ -123,9 +123,26 @@ for (stage in cfg$analysis$stage_levels) {
   log_step("=== ", stage, " (", paste(names(n_by_sex), n_by_sex, sep = "=",
                                       collapse = ", "), ") ===")
 
+  # Depth matching thins cells DOWN toward a global target and leaves cells
+  # already below it alone, so a stratum where one sex sits far below that
+  # target is not matched at all. Male mature neutrophils carry ~330-630 UMIs
+  # against a 2225 target: they are untouched, while female mature cells are
+  # thinned to 2225, leaving the stratum several-fold apart AFTER a global
+  # gate reported 1.00x. The gate is computed over all cells and cannot see
+  # this, so it is recomputed here, per stratum, on the counts this stratum
+  # is actually scored from.
+  stratum_counts <- Seurat::GetAssayData(sub, assay = matched_assay, layer = "counts")
+  stratum_ratio <- depth_ratio(stratum_counts, as.character(sub$sex))
+  stratum_ok <- stratum_ratio <= cfg$gates$max_depth_ratio
+  log_step(sprintf("  depth ratio WITHIN this stratum after matching: %.2fx%s",
+                   stratum_ratio,
+                   if (stratum_ok) "" else " -- OVER LIMIT, effects here are not depth-controlled"))
+
   effects <- do.call(rbind, lapply(score_cols, function(col)
     module_effect(sub, col, "sex", sexes)))
   effects$stage <- stage
+  effects$stratum_depth_ratio <- stratum_ratio
+  effects$stratum_depth_ok <- stratum_ok
 
   # Does the same module separate two halves of ONE library? Anything it finds
   # there is the floor for what it finds between the sexes.
@@ -184,6 +201,8 @@ table_in <- data.frame(
   survives_downsampling = effects$survives_downsampling,
   stage = effects$stage,
   n_cells_min = effects$n_min,
+  stratum_depth_ratio = effects$stratum_depth_ratio,
+  stratum_depth_ok = effects$stratum_depth_ok,
   stringsAsFactors = FALSE
 )
 

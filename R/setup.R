@@ -103,10 +103,19 @@ allocated_cores <- function(cfg = NULL) {
 
 #' Source every analysis module. Kept separate from init_project() so that
 #' individual modules can be sourced on their own during development.
-load_modules <- function(modules = c("io", "preprocess", "dimred", "annotate",
-                                     "composition", "trajectory", "de", "gsea",
-                                     "evidence", "depth", "nullmodel", "gates",
-                                     "plots")) {
+#' Sourced from the directory rather than a list, so a new module is available
+#' the moment the file exists. The hardcoded list silently omitted R/endpoint.R
+#' and step 10 died on "could not find function endpoint_contrast" after
+#' loading the object and resolving its assay -- a failure that says nothing
+#' about its cause. setup.R and packages.R are excluded because they are
+#' sourced before this runs; nothing else here has a load-order dependency,
+#' every file defining only functions and constants.
+load_modules <- function(modules = NULL,
+                         exclude = c("setup", "packages")) {
+  if (is.null(modules)) {
+    files <- list.files(project_path("R"), pattern = "[.][Rr]$")
+    modules <- setdiff(sub("[.][Rr]$", "", files), exclude)
+  }
   for (m in modules) source(project_path("R", paste0(m, ".R")))
   invisible(modules)
 }

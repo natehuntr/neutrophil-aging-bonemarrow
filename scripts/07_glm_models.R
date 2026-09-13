@@ -220,7 +220,30 @@ pt_grid <- seq(min(cd$pt), max(cd$pt), length.out = 5)
 newdat <- expand.grid(pt = pt_grid, age = levels(cd$age), sex = levels(cd$sex))
 fitted_terms <- stats::terms(stats::model.frame(f_lean, as.data.frame(cd)))
 mm_new <- stats::model.matrix(fitted_terms, newdat)
-stopifnot(identical(colnames(mm_new), colnames(traj$any$fit$Beta)))
+
+# The check that matters is STRUCTURAL: same number of columns, in the same
+# order, so a coefficient vector can be applied to this grid. glmGamPoi passes
+# the fitted model matrix's names through make.names(), which turns
+# "splines::ns(pt, PT_DF)1" into "splines..ns.pt..PT_DF.1", so comparing the
+# raw strings fails on a cosmetic difference and kills a 16-hour run at the
+# last step. Normalise both sides before comparing, and say which columns
+# differ when they genuinely do.
+fit_cols <- colnames(traj$any$fit$Beta)
+if (ncol(mm_new) != length(fit_cols))
+  stop("prediction grid has ", ncol(mm_new), " columns but the fit has ",
+       length(fit_cols), ".\nThe grid and the model disagree about the design; ",
+       "check that newdat carries every factor level the fit used.\n",
+       "  grid: ", paste(colnames(mm_new), collapse = ", "),
+       "\n  fit:  ", paste(fit_cols, collapse = ", "))
+
+if (!identical(make.names(colnames(mm_new)), make.names(fit_cols))) {
+  mismatched <- which(make.names(colnames(mm_new)) != make.names(fit_cols))
+  stop("prediction grid columns do not line up with the fitted coefficients ",
+       "at position(s) ", paste(mismatched, collapse = ", "), ":\n",
+       paste(sprintf("  %d  grid=%s  fit=%s", mismatched,
+                     colnames(mm_new)[mismatched], fit_cols[mismatched]),
+             collapse = "\n"))
+}
 
 pred <- traj$any$fit$Beta[tab$name, , drop = FALSE] %*% t(mm_new)
 colnames(pred) <- with(newdat, paste0("pt", round(pt, 2), "_", age, "_", sex))

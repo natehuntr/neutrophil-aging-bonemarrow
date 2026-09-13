@@ -160,17 +160,27 @@ build_candidate_table <- function(candidates, cfg) {
   # Ranked by what should be believed, not by significance: something that
   # resists the confound, sits outside the null and survives depth matching
   # comes first, whatever its nominal effect size.
+  # A stratum the global matching never equalised cannot support a
+  # depth-controlled claim, however large the effect or high the percentile.
+  # Optional so a table written before this column existed still ranks.
+  out$stratum_depth_ok <- if ("stratum_depth_ok" %in% names(candidates))
+    candidates$stratum_depth_ok %in% TRUE else TRUE
+
   out$rank_score <- (as.integer(out$against_bias) * 4) +
     (as.integer(out$exceeds_null) * 2) +
     as.integer(out$survives_downsampling %in% TRUE) -
-    (as.integer(out$below_null_floor) * 8)
+    (as.integer(out$below_null_floor) * 8) -
+    (as.integer(!out$stratum_depth_ok) * 8)
 
   out <- out[order(-out$rank_score, -abs(out$effect_size)), ]
   out <- out[, c("candidate", "stage", "effect_size", "ci_lower", "ci_upper",
                  "direction", "against_bias", "evidence_tier", "null_percentile",
                  "exceeds_null", "below_null_floor", "survives_downsampling",
-                 "n_cells_min", "gate_min_cells", "orthogonal_assay",
-                 "rank_score")]
+                 "n_cells_min", "gate_min_cells", "stratum_depth_ok",
+                 "orthogonal_assay", "rank_score")]
+  if ("stratum_depth_ratio" %in% names(candidates))
+    out$stratum_depth_ratio <- candidates$stratum_depth_ratio[
+      match(rownames(out), rownames(candidates))]
   attr(out, "caveat") <- sex_contrast_caveat(cfg)
   out
 }
