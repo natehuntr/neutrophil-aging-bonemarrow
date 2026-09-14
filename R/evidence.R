@@ -108,17 +108,27 @@ bootstrap_ci <- function(values, statistic = mean, n_boot = 1000, conf = 0.95) {
 #' Matching is by keyword against the pathway or module name; anything
 #' unmatched is reported as such rather than guessed at.
 ASSAY_KEYWORDS <- list(
+  # Widened after the first pathway run: GOBP names the same biology many
+  # ways, and "none proposed" against GOBP_PROTON_TRANSMEMBRANE_TRANSPORT or
+  # GOBP_ATP_BIOSYNTHETIC_PROCESS is a gap in this list, not a statement that
+  # the pathway cannot be measured. A candidate with no assay is dropped from
+  # step 4 entirely, so a missing keyword silently discards real candidates.
   "mitochondrial content"  = c("oxidative phosphoryl", "oxphos", "respiratory chain",
                                "electron transport", "mitochond", "atp synth",
-                               "tricarboxylic", "aerobic respiration"),
+                               "atp biosynth", "atp metabolic", "proton transmembrane",
+                               "proton motive", "tricarboxylic", "aerobic respiration",
+                               "cellular respiration", "precursor metabolites and energy",
+                               "nadh", "ubiquinone", "cytochrome"),
   "ROS"                    = c("reactive oxygen", "superoxide", "oxidative stress",
                                "respiratory burst", "nadph oxidase", "peroxide"),
   "NETs"                   = c("extracellular trap", "chromatin decondens",
                                "histone citrullin", "netosis"),
   "phagocytosis"           = c("phagocyt", "engulf", "opson", "fc receptor",
-                               "complement receptor"),
+                               "complement receptor", "defense response to bacterium",
+                               "killing of cells of another organism"),
   "glucose uptake"         = c("glycoly", "glucose", "hexose", "carbohydrate metab",
-                               "pyruvate"),
+                               "pyruvate", "ribose phosphate", "pentose phosphate",
+                               "monosaccharide", "nucleotide sugar"),
   "CBC"                    = c("granulocyte differentiation", "myeloid differentiation",
                                "granulopoiesis", "cell cycle", "proliferat",
                                "myeloid cell development")

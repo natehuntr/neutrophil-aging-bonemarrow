@@ -58,7 +58,11 @@ for (stage in cfg$analysis$stage_levels) {
     if (is.null(res)) next
 
     n_hits <- if (is.null(res$genes)) 0L else nrow(res$genes)
-    shapes <- if (n_hits) table(res$genes$shape) else integer()
+    # Counted directly rather than looked up in a table: table(x)["monotonic"]
+    # returns NA, not 0, when no gene has that shape, and %||% does not catch
+    # an NA. Six of eight strata reported n_monotonic as NA when the answer
+    # was zero.
+    n_monotonic <- if (n_hits) sum(res$genes$shape == "monotonic") else 0L
 
     if (n_hits) {
       out <- res$genes
@@ -96,7 +100,7 @@ for (stage in cfg$analysis$stage_levels) {
       fdr_threshold = res$fdr_threshold,
       n_genes = n_hits,
       n_familywise = if (n_hits) sum(res$genes$passes_familywise) else 0L,
-      n_monotonic = as.integer(shapes["monotonic"] %||% 0L),
+      n_monotonic = as.integer(n_monotonic),
       n_pathways = n_paths,
       row.names = NULL)
   }
