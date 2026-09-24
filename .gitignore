@@ -6,6 +6,15 @@ results/tables/*
 results/figures/*
 !results/**/.gitkeep
 
+# results/summary is deliberately NOT ignored. scripts/collect_results.R
+# writes it: the tables that carry conclusions, the large ones filtered, and a
+# manifest -- a few hundred KB, meant to be committed so the results travel
+# with the code that produced them.
+
+# R writes this whenever a base-graphics plot is drawn with no device open.
+# It is a side effect of a library, not an output.
+Rplots.pdf
+
 # Site-specific SLURM settings, deliberately untracked so a pull cannot
 # revert them.
 slurm/env.local.sh
