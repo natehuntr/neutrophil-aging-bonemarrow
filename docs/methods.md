@@ -175,13 +175,53 @@ all; candidates arising from such strata are flagged and demoted.
 
 ---
 
-## Composition analysis
+## Composition and imbalance
 
 Stage proportions were tabulated by age within each sex and tested by
 chi-square, with centred log-ratio transformation applied to remove the
 sum-to-one constraint so that one stage rising is not confused with the others
 being pushed down. Cross-sex composition comparisons are reported with an
 explicit library-confound annotation attached to every row.
+
+A proportion says how large a population is, not whether that size is
+surprising. Each population was therefore also scored as log2(observed /
+expected), where expected is the count implied by the margins of the table
+being examined — the share the population would hold if it were distributed
+across ages (or sexes) in the same ratio as every other population. Zero means
+exactly as expected. Standardised Pearson residuals are reported alongside,
+dividing by the full variance rather than the square root of the expected
+count so that residuals from populations with very different margins are
+comparable.
+
+Intervals come from resampling cells within each group from the observed
+proportions (1000 iterations), rebuilding the whole table including its
+margins on each iteration, since the expected counts are estimated from the
+same cells. **These are cell-level intervals.** They do not capture
+between-animal variance, which this design cannot measure, and therefore
+understate the true uncertainty; they say only how much of a score survives
+cell sampling alone. Populations holding fewer than 20 cells in every group of
+a contrast are dropped before scoring rather than reported with a wide
+interval, which would read as a measured null rather than as absent data.
+
+Two contrasts are computed and are not equivalent: across ages within a sex
+(all ages share a library, so this is design-clean) and across sexes within an
+age (confounded, with the caveat carried in every row of the table).
+
+## The progenitor compartment
+
+Granulopoiesis analysis begins at the GMP, which is one step too late to say
+where an age-related shift originates: proportionally more GMPs in aged marrow
+may mean GMPs are produced faster, or that the upstream pool has itself shifted
+toward the myeloid branch. The SingleR/ImmGen annotation already resolves
+LT-HSC, ST-HSC, MPP, CMP, GMP, MEP, CLP, MDP and CDP, so the progenitor
+compartment was analysed from the merged object with the same composition,
+imbalance and endpoint-contrast machinery, and with depth matching rebuilt over
+its own cells rather than inherited from the granulocytic subset.
+
+Sibling branches (MEP, CLP, MDP, CDP) were retained deliberately. Composition
+is a closed system, so whether GMP output rises at the expense of the erythroid
+or the lymphoid branch is part of the answer; restricting the analysis to the
+myeloid axis would conceal it.
 
 ---
 

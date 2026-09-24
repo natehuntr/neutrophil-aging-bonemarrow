@@ -27,6 +27,7 @@
 #         stage_composition_clr.csv, stage_sex_differences.csv,
 #         pseudotime_shifts.csv, potency_shifts.csv (+ their summaries)
 #         results/tables/depth_by_age_within_sex.csv
+#         results/tables/stage_imbalance.csv
 #         results/figures/stage_composition.pdf, stage_trends.pdf,
 #         pseudotime_by_age.pdf, potency_by_age.pdf
 # ---------------------------------------------------------------------------
@@ -96,6 +97,17 @@ if (!is.null(age_test$trends)) {
 # with the others being pushed down.
 clr <- composition_clr_matrix(composition)
 write_table(as.data.frame(clr), cfg, "stage_composition_clr.csv", row.names = TRUE)
+
+# Which stages are over- or under-represented, and where. The composition
+# table says how big each stage is; this says whether that size is surprising
+# given how every other stage is distributed.
+stage_counts <- population_counts(gmp_neu, cfg, population_col = "stage",
+                                  levels = cfg$analysis$stage_levels)
+stage_imbalance <- imbalance_report(stage_counts, cfg)
+if (!is.null(stage_imbalance)) {
+  write_table(stage_imbalance, cfg, "stage_imbalance.csv")
+  report_imbalance(stage_imbalance)
+}
 
 sex_test <- composition_sex_test(composition, cfg)
 if (!is.null(sex_test)) {

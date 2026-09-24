@@ -23,13 +23,18 @@
 #'
 #' Proportions are within-group (they sum to 1 over stages for each age x sex),
 #' which is what makes them comparable when group sizes differ several-fold.
+#' @param levels the population levels, in the order tables and plots should
+#'   read. Defaults to the maturation stages; the progenitor compartment passes
+#'   analysis.progenitor_levels instead, which is the only difference between
+#'   analysing the two.
 stage_composition <- function(obj, cfg,
                               stage_col = "stage",
                               age_col = "age",
                               sex_col = "sex",
-                              age_levels = cfg$analysis$age_levels) {
+                              age_levels = cfg$analysis$age_levels,
+                              levels = cfg$analysis$stage_levels) {
   meta <- data.frame(
-    stage = factor(as.character(obj[[stage_col]][, 1]), levels = cfg$analysis$stage_levels),
+    stage = factor(as.character(obj[[stage_col]][, 1]), levels = levels),
     age   = factor(as.character(obj[[age_col]][, 1]), levels = age_levels),
     sex   = factor(as.character(obj[[sex_col]][, 1]), levels = cfg$analysis$sex_levels)
   )
@@ -49,7 +54,7 @@ stage_composition <- function(obj, cfg,
   out$ci_high <- ci$upper
 
   out$age <- factor(out$age, levels = age_levels)
-  out$stage <- factor(out$stage, levels = cfg$analysis$stage_levels)
+  out$stage <- factor(out$stage, levels = levels)
   out[order(out$sex, out$age, out$stage), ]
 }
 

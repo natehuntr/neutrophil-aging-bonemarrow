@@ -195,7 +195,7 @@ depth:
   # Steps that read RNAmatched instead of RNA. Step 5 is listed separately
   # because rebuilding the trajectory on matched counts costs ~3.5 hours and
   # step 9's pseudotime comes from it.
-  matched_steps: [4, 6, 7, 8, 10]
+  matched_steps: [4, 6, 7, 8, 10, 11]
   match_trajectory: true
   # Re-score CytoTRACE2 on the matched counts in step 3. Of everything here it
   # is the measure most directly exposed to depth, since it reads
@@ -289,6 +289,42 @@ analysis:
   # A stage that exists in the config and not in the data fails every gate and
   # forces a skip in every stratified step.
   stage_levels: [GMPs, proNeu, preNeu, immature, mature]
+  # The progenitor compartment upstream of GMP, as SingleR/ImmGen fine labels
+  # are renamed by IMMGEN_LABEL_MAP. Ordered along the developmental axis so
+  # tables and plots read in that direction.
+  #
+  # The sibling branches (MEP, CLP, MDP, CDP) are included on purpose even
+  # though they are not granulocytic: composition is a closed system, so
+  # whether GMP output rises at the expense of the erythroid or the lymphoid
+  # branch is part of the answer, and dropping them would hide it.
+  progenitor_levels:
+    - "Long-Term HSC (LT-HSC)"
+    - "Long-Term HSC (CD34- Flt3-)"
+    - "Short-Term HSC (CD34+ Flt3-)"
+    - "Short-Term HSC (Sca1+ Lin-, SLAM)"
+    - "HSC subset (CD150- CD48-, SLAM MPP)"
+    - "Multipotent Progenitor (CD34+ Flt3-)"
+    - "Multipotent Lymphoid Progenitor"
+    - "Common Myeloid Progenitor (CMP)"
+    - "Granulocyte-Monocyte Progenitor (GMP)"
+    - "Megakaryocyte-Erythroid Progenitor (MEP)"
+    - "Common Lymphoid Progenitor/pro-B cell"
+    - "Macrophage-DC Progenitor (MDP)"
+    - "Common Dendritic Cell Progenitor (CDP)"
+
+# ---------------------------------------------------------------------------
+# Population imbalance
+#
+# log2(observed / expected) per population per group, where expected comes
+# from the margins of the table being examined. The interval is a cell-level
+# bootstrap: it says how much of a score survives resampling cells, and does
+# NOT capture between-animal variance, which this design cannot measure.
+# ---------------------------------------------------------------------------
+imbalance:
+  n_boot: 1000
+  # Populations below this in any group of a contrast are dropped from it: a
+  # log ratio built on four cells is a statement about four cells.
+  min_cells_per_group: 20
 
 # ---------------------------------------------------------------------------
 # Stage assignment
