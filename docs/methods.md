@@ -301,6 +301,22 @@ order, reversing before the endpoint, or overshooting it. **This is a ranking
 signal, not validation** — it reuses the cells that found the genes, and several
 intermediate strata are small. Per-age cell counts accompany every table.
 
+Each stratum also reports the ratio of median genes detected between the two
+endpoint ages. Permuting the age labels destroys any association between age
+and library complexity, so the threshold is built for a stratum in which
+complexity does not differ between the endpoints; where it does, genes whose
+detection follows complexity carry that difference into their effect and clear
+a threshold built without it. A long gene list beside a skewed detection ratio
+is one difference reported many times.
+
+Two definitions of "GMP" exist in the outputs and are not interchangeable. In
+the granulocytic analysis (steps 3–10) a GMP is a cell whose highest-scoring
+UCell RNA signature is the GMP signature, within the GMP/neutrophil subset. In
+the progenitor analysis (step 11) a GMP is a cell SingleR assigns the ImmGen
+`Stem cells (GMP)` label, within the full merged object. The two overlap but do
+not coincide, and results should not be compared across them without stating
+which is meant.
+
 ---
 
 ## Gene set enrichment
