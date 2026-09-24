@@ -163,6 +163,33 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
   log_step(sprintf("  %s: %d genes detected in >= %d cells", label, nrow(expr),
                    cfg$endpoint$min_cells_detected))
 
+  # What the permutation null cannot see, and step 6 already reports for its
+  # own contrast: shuffling the two age labels destroys any association
+  # between age and library complexity, so the threshold is built for a
+  # stratum in which complexity does not differ between the endpoints. Where
+  # it does, every gene whose detection follows complexity carries that
+  # difference into its effect and clears a threshold built without it.
+  #
+  # This matters more here than anywhere else in the pipeline: the progenitor
+  # compartment came in at a 3.65x depth ratio before matching, and global
+  # matching thins cells DOWN toward a common target while leaving cells
+  # already below it untouched, so a population sitting under that target is
+  # not matched by it.
+  detected <- Matrix::colSums(expr > 0)
+  ref_n <- stats::median(detected[ages == reference])
+  end_n <- stats::median(detected[ages == endpoint])
+  detection_ratio <- if (is.finite(ref_n) && ref_n > 0) end_n / ref_n else NA_real_
+  limit <- cfg$gates$max_depth_ratio %||% 1.3
+  detection_skewed <- is.finite(detection_ratio) &&
+    (detection_ratio > limit || detection_ratio < 1 / limit)
+
+  log_step(sprintf(
+    "  %s: median genes detected %s %.0f vs %s %.0f (ratio %.2f)%s",
+    label, reference, ref_n, endpoint, end_n, detection_ratio,
+    if (detection_skewed)
+      sprintf(" -- OVER %.2fx, gene hits here may be that difference", limit)
+    else ""))
+
   effect <- endpoint_effect(expr, ages, reference, endpoint)
   perms <- endpoint_null(expr, ages, reference, endpoint, n_perm, cfg$seed)
 
@@ -188,6 +215,8 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
   if (!length(hits)) return(list(threshold = threshold, null_max = null_max,
                                  fwer_threshold = fwer_threshold,
                                  fdr_threshold = fdr_threshold,
+                                 detection_ratio = detection_ratio,
+                                 detection_skewed = detection_skewed,
                                  effect = effect, genes = NULL,
                                  n_by_age = n_by_age))
 
@@ -213,6 +242,7 @@ endpoint_contrast <- function(obj, cfg, label = "", assay = "RNA",
   # clearing a family-wise threshold built from the maximum across genes.
   list(threshold = threshold, null_max = null_max,
        fwer_threshold = fwer_threshold, fdr_threshold = fdr_threshold,
+       detection_ratio = detection_ratio, detection_skewed = detection_skewed,
        effect = effect, genes = shape, n_by_age = n_by_age)
 }
 

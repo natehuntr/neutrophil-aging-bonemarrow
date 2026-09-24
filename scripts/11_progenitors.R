@@ -174,6 +174,10 @@ for (population in present) {
       fwer_threshold = res$fwer_threshold,
       n_genes = n_hits,
       n_monotonic = if (n_hits) sum(res$genes$shape == "monotonic") else 0L,
+      # Read beside n_genes: a long list from a stratum whose endpoints differ
+      # in detectable genes is one difference reported many times.
+      detection_ratio = res$detection_ratio,
+      detection_skewed = res$detection_skewed,
       row.names = NULL)
   }
 }

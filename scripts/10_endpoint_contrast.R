@@ -102,6 +102,10 @@ for (stage in cfg$analysis$stage_levels) {
       n_familywise = if (n_hits) sum(res$genes$passes_familywise) else 0L,
       n_monotonic = as.integer(n_monotonic),
       n_pathways = n_paths,
+      # Read beside n_genes: a long list from a stratum whose endpoints differ
+      # in detectable genes is one difference reported many times.
+      detection_ratio = res$detection_ratio,
+      detection_skewed = res$detection_skewed,
       row.names = NULL)
   }
 }
