@@ -31,14 +31,70 @@
 # edit.
 # ---------------------------------------------------------------------------
 
-# Untracked site settings, if present. Sourced first so the defaults below,
-# which all use ${VAR:-...}, leave whatever it sets alone.
+# Site settings, from outside the project first and then from inside it, so
+# the more specific in-project file wins where both exist.
+#
+# THE OUT-OF-PROJECT LOCATION IS THE IMPORTANT ONE. slurm/env.local.sh lives
+# in the working copy, so it survives a git pull but NOT re-downloading the
+# repository as an archive -- and a rebuilt working copy with no site settings
+# does not fail loudly. It falls back to $HOME for the library, finds no
+# packages there, and every job dies on "missing packages: Seurat, Matrix,
+# dplyr, ..." as though nothing were ever installed.
+#
+# Keep the real settings at ~/.config/bm-aging/env.sh (or point BM_AGING_ENV
+# at them) and they outlive any number of fresh downloads.
+# What the environment already held. The settings files use plain assignments,
+# which overwrite an exported value, so a one-off override on the command line
+# would otherwise be silently ignored -- contrary to what this file documents
+# above. Captured here and put back after sourcing.
+_pre_R_MODULE="${R_MODULE:-}"
+_pre_R_LIBS_USER="${R_LIBS_USER:-}"
+_pre_GITHUB_PAT="${GITHUB_PAT:-}"
+_pre_CRAN_SNAPSHOT="${CRAN_SNAPSHOT:-}"
+
 _env_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-slurm/env.sh}")" && pwd)"
-if [[ -f "$_env_dir/env.local.sh" ]]; then
-  # shellcheck disable=SC1091
-  source "$_env_dir/env.local.sh"
+_env_found=""
+for _candidate in "${BM_AGING_ENV:-}" \
+                  "$HOME/.config/bm-aging/env.sh" \
+                  "$HOME/.bm-aging-env.sh" \
+                  "$_env_dir/env.local.sh"; do
+  if [[ -n "$_candidate" && -f "$_candidate" ]]; then
+    # shellcheck disable=SC1090
+    source "$_candidate"
+    _env_found="${_env_found}${_env_found:+, }$_candidate"
+  fi
+done
+
+if [[ -z "$_env_found" ]]; then
+  cat >&2 <<'MSG'
+
+WARNING: no site settings file found. Looked at, in order:
+  $BM_AGING_ENV, ~/.config/bm-aging/env.sh, ~/.bm-aging-env.sh,
+  slurm/env.local.sh
+
+R_MODULE and R_LIBS_USER will fall back to defaults that are almost certainly
+wrong for this cluster, and jobs will fail with "missing packages: Seurat,
+Matrix, dplyr, ..." -- which reads as an install problem and is not one.
+
+  mkdir -p ~/.config/bm-aging
+  cp slurm/env.local.sh.example ~/.config/bm-aging/env.sh
+  # then edit it
+
+That location is outside the project, so re-downloading the repository cannot
+remove it.
+
+MSG
+else
+  echo "site settings: $_env_found" >&2
 fi
-unset _env_dir
+unset _env_dir _env_found _candidate
+
+# Restore anything the caller set explicitly; it outranks every file.
+[[ -n "$_pre_R_MODULE"     ]] && R_MODULE="$_pre_R_MODULE"
+[[ -n "$_pre_R_LIBS_USER"  ]] && R_LIBS_USER="$_pre_R_LIBS_USER"
+[[ -n "$_pre_GITHUB_PAT"   ]] && GITHUB_PAT="$_pre_GITHUB_PAT"
+[[ -n "$_pre_CRAN_SNAPSHOT" ]] && CRAN_SNAPSHOT="$_pre_CRAN_SNAPSHOT"
+unset _pre_R_MODULE _pre_R_LIBS_USER _pre_GITHUB_PAT _pre_CRAN_SNAPSHOT
 
 # Environment module(s) providing R, space-separated. Several packages need
 # system libraries that EasyBuild ships as their own modules -- sf needs GDAL,
