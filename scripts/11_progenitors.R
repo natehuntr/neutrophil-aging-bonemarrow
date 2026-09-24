@@ -50,6 +50,17 @@ if (!length(present))
        "The object has: ", paste(utils::head(sort(unique(label)), 30),
                                  collapse = ", "))
 
+# The reverse check. A label the data carries but the config does not list is
+# silently outside the analysis, and a typo in progenitor_levels looks exactly
+# like a population that was never there. Only progenitor-like labels are
+# reported, since the object also holds every mature lineage.
+unlisted <- setdiff(grep("HSC|Progenitor|MEP|CMP|GMP|CLP|MDP|CDP|Stem",
+                         unique(label), value = TRUE), levels_wanted)
+if (length(unlisted))
+  log_step("progenitor-like labels in the data but NOT in ",
+           "analysis.progenitor_levels (excluded from this analysis): ",
+           paste(sort(unlisted), collapse = ", "))
+
 prog <- select_cells(bm, list(
   "fine_label_readable is a configured progenitor" = label %in% present,
   "age is one of analysis.age_levels" = bm$age %in% cfg$analysis$age_levels
@@ -62,12 +73,16 @@ print(table(prog$progenitor, prog$age, prog$sex))
 # ===========================================================================
 # 1. Composition
 # ===========================================================================
+# stage_composition() names its output column `stage` and the plotting and CLR
+# helpers read it, so the object keeps that name and only the written copy is
+# relabelled. Renaming in place and back again would leave the plots one edit
+# away from breaking silently.
 composition <- stage_composition(prog, cfg, stage_col = "progenitor",
                                  levels = present)
-names(composition)[names(composition) == "stage"] <- "population"
-write_table(composition, cfg, "progenitor_composition.csv")
+written <- composition
+names(written)[names(written) == "stage"] <- "population"
+write_table(written, cfg, "progenitor_composition.csv")
 
-names(composition)[names(composition) == "population"] <- "stage"
 save_figure(plot_stage_composition(composition), cfg,
             "progenitor_composition.pdf", width = 10, height = 5)
 save_figure(plot_stage_trends(composition), cfg,

@@ -64,7 +64,7 @@ check("endpoint ages are in analysis$age_levels",
             unlist(cfg$analysis$age_levels)))
 
 cat("\n--- modules ---\n")
-modules <- tryCatch({ load_packages_quietly <- TRUE; load_modules() },
+modules <- tryCatch({ load_modules() },
                     error = function(e) { check("R/ modules source", FALSE,
                                                 conditionMessage(e)); NULL })
 if (!is.null(modules)) check("R/ modules source", TRUE,

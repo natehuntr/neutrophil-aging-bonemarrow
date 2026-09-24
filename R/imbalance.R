@@ -64,8 +64,16 @@ table_imbalance <- function(tab, pseudocount = 0.5) {
   col_m <- colSums(tab)
   expected <- outer(row_m, col_m) / total
 
-  resid <- (tab - expected) /
-    sqrt(expected * outer(1 - row_m / total, 1 - col_m / total))
+  # The standardised residual is undefined where its denominator vanishes:
+  # a population with no cells anywhere in the block (expected 0), or one
+  # holding every cell in it (row margin == total, so 1 - row_m/total == 0).
+  # Both arise on real progenitor data -- rare lineages absent from a library,
+  # and blocks left with a single population after the cell-count filter --
+  # and both produce NaN, which reads downstream as a computed value. NA says
+  # "not defined here" instead.
+  denom <- expected * outer(1 - row_m / total, 1 - col_m / total)
+  resid <- (tab - expected) / sqrt(denom)
+  resid[!is.finite(resid)] <- NA_real_
 
   # The pseudocount keeps an absent population finite. With counts in the
   # hundreds it shifts log2 by well under 0.01; in a cell holding zero it is
@@ -95,7 +103,11 @@ bootstrap_imbalance <- function(tab, n_boot = 1000, seed = 42, conf = 0.95) {
       probs <- tab[, j] / col_totals[j]
       as.numeric(stats::rmultinom(1, col_totals[j], probs))
     }, numeric(nrow(tab)))
-    dimnames(resampled) <- dimnames(tab)
+    # vapply returns a bare vector when FUN.VALUE has length 1, i.e. when the
+    # block holds a single population, and dimnames<- then fails on a
+    # non-array. Rebuild the matrix rather than relying on the shape.
+    resampled <- matrix(resampled, nrow = nrow(tab), ncol = length(col_totals),
+                        dimnames = dimnames(tab))
     as.numeric(table_imbalance(resampled)$log2_ratio)
   }, numeric(length(tab)))
 
@@ -118,8 +130,30 @@ imbalance_scores <- function(counts, across = "age", within = "sex",
   out <- lapply(names(blocks), function(level) {
     block <- blocks[[level]]
     tab <- stats::xtabs(stats::reformulate(c("population", across), "n"), block)
-    tab <- as.matrix(unclass(tab))
+    tab <- matrix(as.numeric(tab), nrow = nrow(tab),
+                  dimnames = dimnames(tab))
+
+    # A group holding no cells is not a group with an expected share of zero;
+    # it is a group this contrast has nothing to say about. Emitting zeros for
+    # it would read as "exactly as expected".
+    empty <- colSums(tab) == 0
+    if (any(empty)) {
+      log_step("  ", level, ": no cells in ",
+               paste(colnames(tab)[empty], collapse = ", "),
+               " -- excluded from this contrast")
+      tab <- tab[, !empty, drop = FALSE]
+    }
     if (ncol(tab) < 2 || sum(tab) == 0) return(NULL)
+
+    # Imbalance is relative: with one population left there is nothing for it
+    # to be imbalanced against, and every score is identically zero. Saying so
+    # beats reporting a table of zeros.
+    if (nrow(tab) < 2) {
+      log_step("  ", level, ": only one population (",
+               rownames(tab)[1], ") -- imbalance is undefined with nothing ",
+               "to compare against")
+      return(NULL)
+    }
 
     stats_tbl <- table_imbalance(tab)
     boot <- bootstrap_imbalance(tab, n_boot = n_boot, seed = seed)
