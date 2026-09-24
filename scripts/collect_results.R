@@ -18,7 +18,9 @@
 # ---------------------------------------------------------------------------
 
 source(if (file.exists("R/setup.R")) "R/setup.R" else "../R/setup.R")
-cfg <- init_project(quiet = TRUE)
+# Only the config, not init_project(): this reads and writes CSVs with base R,
+# and should run on a login node or a laptop without Seurat installed.
+cfg <- load_config()
 
 out_dir <- file.path(dirname(cfg$paths$tables), "summary")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -97,8 +99,12 @@ take_whole("sex_control_gates.csv", "gate outcomes for the sex contrast")
 take_whole("sex_gene_panel_check.csv", "sex-chromosome genes present in the probe set")
 
 # --- per-gene endpoint tables, whole: they are already short ----------------
-for (file in list.files(cfg$paths$tables, "^endpoint_(?!gsea|summary|progenitor_summary)",
-                        perl = TRUE)) {
+# list.files() takes no `perl` argument and its regex engine has no lookahead,
+# so the exclusions are applied separately.
+endpoint_files <- list.files(cfg$paths$tables, "^endpoint_")
+endpoint_files <- endpoint_files[!grepl("^endpoint_(gsea|summary|progenitor_summary)",
+                                        endpoint_files)]
+for (file in endpoint_files) {
   take_whole(file, "genes changing 3m -> 18m, with their 9m/12m shape")
 }
 
@@ -121,9 +127,9 @@ take_filtered("pt_age_sex_hits.csv", "trajectory GLM hits",
               function(df) rep(TRUE, nrow(df)), "")
 for (file in list.files(cfg$paths$tables, "^omnibus_")) {
   take_filtered(file, "cell-level NB-GLM omnibus test",
-                function(df) utils::head(order(df$p_val_diagnostic %||%
-                                                 seq_len(nrow(df))), 500) %in%
-                  seq_len(nrow(df)),
+                function(df) seq_len(nrow(df)) %in%
+                  utils::head(order(df$p_val_diagnostic %||% df$pval %||%
+                                      seq_len(nrow(df))), 500),
                 "top 500 by the diagnostic statistic")
 }
 
