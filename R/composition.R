@@ -95,7 +95,10 @@ clr_transform <- function(proportions, pseudocount = 0.5, n_group = NULL) {
 composition_age_test <- function(composition, cfg, age_levels = cfg$analysis$age_levels) {
   results <- list()
 
-  for (this_sex in levels(composition$sex)) {
+  # unique(), not levels(): stage_composition() leaves sex as character, and
+  # levels() of a character vector is NULL -- the loop then never ran and the
+  # test returned nothing, silently.
+  for (this_sex in unique(as.character(composition$sex))) {
     sub <- composition[composition$sex == this_sex, ]
     if (!nrow(sub)) next
 
