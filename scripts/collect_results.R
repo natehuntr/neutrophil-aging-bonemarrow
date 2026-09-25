@@ -108,6 +108,16 @@ for (file in endpoint_files) {
   take_whole(file, "genes changing 3m -> 18m, with their 9m/12m shape")
 }
 
+# --- step 6 pairwise age changes: protein is the depth-robust modality -------
+# The ADT tables are the only per-feature age result that does not ride on RNA
+# depth, which is what makes them the check on the low-depth male strata.
+for (file in list.files(cfg$paths$tables, "^age_changing_.*_ADT[.]csv$")) {
+  take_whole(file, "surface proteins changing with age (step 6, ADT)")
+}
+for (file in list.files(cfg$paths$tables, "^age_changing_.*_RNA[.]csv$")) {
+  take_whole(file, "genes changing with age (step 6, RNA)")
+}
+
 # --- sex candidates: the ones the ranking says to believe --------------------
 take_filtered("sex_candidates.csv",
               "sex-difference candidates for orthogonal validation",
