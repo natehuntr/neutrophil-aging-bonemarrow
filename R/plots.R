@@ -3,6 +3,54 @@
 # choose whether to display or save it.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# One visual system for every figure.
+#
+# Sex is identity, so it gets two categorical hues (validated for colour-vision
+# deficiency: adjacent CVD delta-E 24.7). Age and maturation stage are ordered,
+# so each gets a single-hue ramp, light to dark, never a rainbow. Effects that
+# run both ways (up / down with age) use a blue-red diverging scale with a grey
+# midpoint. Status colours are not used for data.
+# ---------------------------------------------------------------------------
+SEX_COLOURS   <- c(female = "#2a78d6", male = "#eb6834")
+AGE_COLOURS   <- c("3m" = "#86b6ef", "9m" = "#3987e5", "12m" = "#1c5cab", "18m" = "#0d366b")
+STAGE_COLOURS <- c(GMPs = "#86b6ef", proNeu = "#5598e7", preNeu = "#2a78d6",
+                   immature = "#1c5cab", mature = "#104281")
+DIVERGING     <- c(low = "#2a78d6", mid = "#f0efec", high = "#e34948")
+INK <- "#1f2328"; MUTED <- "#6b7280"; GRID <- "#e7e9ee"
+
+#' The shared theme: recessive grid, no chart junk, text in ink not data colour.
+theme_bm <- function(base_size = 11) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.grid.major = ggplot2::element_line(colour = GRID, linewidth = 0.4),
+      strip.text = ggplot2::element_text(face = "bold", hjust = 0, colour = INK),
+      plot.title = ggplot2::element_text(face = "bold", colour = INK),
+      plot.title.position = "plot",
+      plot.subtitle = ggplot2::element_text(colour = MUTED),
+      plot.caption = ggplot2::element_text(colour = MUTED, hjust = 0),
+      plot.caption.position = "plot",
+      axis.text = ggplot2::element_text(colour = MUTED),
+      legend.position = "top", legend.justification = "left")
+}
+
+#' Colour scales keyed by name, so a filtered plot never repaints survivors.
+scale_sex <- function(aesthetic = "colour", name = "Sex", ...)
+  ggplot2::scale_discrete_manual(aesthetic, values = SEX_COLOURS, name = name, ...)
+scale_age <- function(aesthetic = "colour", name = "Age", ...)
+  ggplot2::scale_discrete_manual(aesthetic, values = AGE_COLOURS, name = name, ...)
+scale_stage <- function(aesthetic = "fill", name = "Stage", ...)
+  ggplot2::scale_discrete_manual(aesthetic, values = STAGE_COLOURS, name = name, ...)
+
+#' Readable GO:BP names: no prefix, sentence case, wrapped.
+pretty_pathway <- function(x, width = 48) {
+  x <- tolower(gsub("_", " ", sub("^GOBP_", "", x)))
+  x <- paste0(toupper(substr(x, 1, 1)), substr(x, 2, nchar(x)))
+  vapply(x, function(s) paste(strwrap(s, width), collapse = "\n"), character(1),
+         USE.NAMES = FALSE)
+}
+
 #' The four QC distributions, split by age.
 plot_qc_metrics <- function(obj, group.by = "age") {
   metrics <- c("log10GenesPerUMI", "mitoRatio", "riboRatio", "percent.hb")
@@ -130,8 +178,9 @@ plot_gsea_bars <- function(comparison, n = 25) {
 }
 
 #' NES per age for the pathways the interaction test flagged.
-plot_nes_trajectories <- function(classified, cfg, n = 30) {
-  age_levels <- cfg$analysis$age_levels
+plot_nes_trajectories <- function(classified, cfg, n = 30,
+                                  age_levels = cfg$analysis$age_levels) {
+  age_levels <- age_levels[paste0("NES_", age_levels) %in% names(classified)]
   top <- utils::head(classified[which(classified$class == "sex-differential ageing (supported)"), ], n)
   if (!nrow(top)) { message("no supported hits to plot"); return(NULL) }
 
@@ -152,11 +201,40 @@ plot_nes_trajectories <- function(classified, cfg, n = 30) {
     ggplot2::theme_minimal(base_size = 10)
 }
 
-#' Venn of the significant trajectory genes from each age.
-plot_gene_venn <- function(gene_lists, title = "") {
-  ggVennDiagram::ggVennDiagram(gene_lists) +
-    ggplot2::scale_fill_gradient(low = "white", high = "lightblue") +
-    ggplot2::labs(title = title)
+#' Moran's I at the first age against every later age, per gene.
+#'
+#' Points on the diagonal are genes as structured along the trajectory at both
+#' ages; off-diagonal genes gained or lost structure. This replaces a Venn of
+#' per-age significance lists, which compared power rather than biology.
+plot_moran_by_age <- function(by_age, age_levels, title = "", n_label = 12) {
+  i_cols <- paste0("I_", age_levels)
+  i_cols <- i_cols[i_cols %in% names(by_age)]
+  if (length(i_cols) < 2) return(NULL)
+  ref <- i_cols[1]
+  long <- do.call(rbind, lapply(i_cols[-1], function(col) {
+    keep <- is.finite(by_age[[ref]]) & is.finite(by_age[[col]])
+    data.frame(gene = by_age$gene[keep], x = by_age[[ref]][keep],
+               y = by_age[[col]][keep], age = sub("^I_", "", col))
+  }))
+  long$age <- factor(long$age, levels = sub("^I_", "", i_cols[-1]))
+  long$delta <- long$y - long$x
+  labels <- do.call(rbind, lapply(split(long, long$age), function(d)
+    utils::head(d[order(-abs(d$delta)), ], n_label)))
+  lim <- range(c(long$x, long$y), na.rm = TRUE)
+
+  ggplot2::ggplot(long, ggplot2::aes(.data$x, .data$y)) +
+    ggplot2::geom_abline(slope = 1, intercept = 0, colour = "grey60") +
+    ggplot2::geom_point(alpha = 0.25, size = 0.6, colour = "grey30") +
+    ggplot2::geom_point(data = labels, colour = "#2a78d6", size = 1.6) +
+    ggplot2::geom_text(data = labels, ggplot2::aes(label = .data$gene),
+                       size = 2.6, vjust = -0.7, colour = "grey15", check_overlap = TRUE) +
+    ggplot2::facet_wrap(~ age, labeller = ggplot2::labeller(age = function(a)
+      paste(sub("^I_", "", ref), "vs", a))) +
+    ggplot2::coord_equal(xlim = lim, ylim = lim) +
+    ggplot2::labs(x = paste("Moran's I at", sub("^I_", "", ref)),
+                  y = "Moran's I at the later age", title = title,
+                  subtitle = "Structure along each age's own trajectory; labelled: largest changes") +
+    theme_bm()
 }
 
 #' Stacked stage composition per age, one panel per sex.
@@ -337,4 +415,87 @@ write_confound_diagnostics <- function(obj, cfg, retention = NULL,
                 paste0(prefix, "_qc_retention.pdf"), width = 9, height = 5)
 
   invisible(TRUE)
+}
+
+# ---------------------------------------------------------------------------
+# Protein gate (step 12)
+# ---------------------------------------------------------------------------
+
+#' The gate itself, drawn: Ly6G against CD11b, then CXCR2 against Ly6G within
+#' myeloid cells, one row per library, with the thresholds used.
+plot_protein_gate <- function(cells, thresholds) {
+  cells <- cells[!is.na(cells$protein_class), ]
+  thr <- function(sex, m) {
+    t <- thresholds[thresholds$sex == sex & thresholds$marker == m, "threshold"]
+    if (length(t)) t[1] else NA_real_
+  }
+  lines <- do.call(rbind, lapply(unique(cells$sex), function(s)
+    data.frame(sex = s, cd11b = thr(s, "CD11b"), ly6g = thr(s, "Ly6G"),
+               cxcr2 = thr(s, "CXCR2"))))
+  a <- ggplot2::ggplot(cells, ggplot2::aes(.data$CD11b, .data$Ly6G)) +
+    ggplot2::geom_bin2d(bins = 90) +
+    ggplot2::scale_fill_gradient(low = "#cde2fb", high = "#0d366b", trans = "log10",
+                                 name = "Cells") +
+    ggplot2::geom_vline(data = lines, ggplot2::aes(xintercept = .data$cd11b), colour = INK) +
+    ggplot2::geom_hline(data = lines, ggplot2::aes(yintercept = .data$ly6g), colour = INK) +
+    ggplot2::facet_wrap(~ sex) +
+    ggplot2::labs(x = "CD11b (log, isotype-centred)", y = "Ly6G",
+                  title = "Protein gate: myeloid cells, then Ly6G") +
+    theme_bm()
+  my <- cells[cells$CD11b > lines$cd11b[match(cells$sex, lines$sex)] &
+                is.finite(cells$CXCR2), ]
+  if (!nrow(my)) return(a)
+  b <- ggplot2::ggplot(my, ggplot2::aes(.data$Ly6G, .data$CXCR2)) +
+    ggplot2::geom_bin2d(bins = 90) +
+    ggplot2::scale_fill_gradient(low = "#cde2fb", high = "#0d366b", trans = "log10",
+                                 name = "Cells") +
+    ggplot2::geom_vline(data = lines, ggplot2::aes(xintercept = .data$ly6g), colour = INK) +
+    ggplot2::geom_hline(data = lines[is.finite(lines$cxcr2), ],
+                        ggplot2::aes(yintercept = .data$cxcr2), colour = INK) +
+    ggplot2::facet_wrap(~ sex) +
+    ggplot2::labs(x = "Ly6G", y = "CXCR2 (CD182)",
+                  title = "Within CD11b+ cells: CXCR2 separates mature-like from immature-like") +
+    theme_bm()
+  patchwork::wrap_plots(a, b, ncol = 1)
+}
+
+#' Protein-stage composition by age, before and after RNA QC, side by side.
+#'
+#' If the two rows of panels differ for one library, RNA QC changed its stage
+#' mix -- and the RNA-staged composition inherited that change.
+plot_protein_composition <- function(comp, stage_levels) {
+  comp$stage <- factor(as.character(comp$stage), levels = stage_levels)
+  comp$age <- factor(as.character(comp$age), levels = names(AGE_COLOURS))
+  cols <- stats::setNames(c("#86b6ef", "#2a78d6", "#104281"), stage_levels)
+  ggplot2::ggplot(comp, ggplot2::aes(.data$age, .data$proportion, fill = .data$stage)) +
+    ggplot2::geom_col(width = 0.7, colour = "white", linewidth = 0.4) +
+    ggplot2::facet_grid(cell_set ~ sex) +
+    ggplot2::scale_fill_manual(values = cols, name = "Protein stage") +
+    ggplot2::scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    ggplot2::labs(x = NULL, y = "Share of protein-gated granulocytes",
+                  title = "Stage mix from surface protein, before and after RNA QC",
+                  subtitle = "Top: every singlet. Bottom: the cells the RNA analysis kept.") +
+    ggplot2::guides(fill = ggplot2::guide_legend(nrow = 1)) +
+    theme_bm()
+}
+
+#' Fraction of each protein-defined class that survived RNA QC, by age.
+plot_protein_retention <- function(retention, stage_levels) {
+  r <- retention[retention$protein_class %in% stage_levels, ]
+  r$protein_class <- factor(r$protein_class, levels = stage_levels)
+  r$age <- factor(r$age, levels = names(AGE_COLOURS))
+  ggplot2::ggplot(r, ggplot2::aes(.data$age, .data$retained_fraction,
+                                  colour = .data$sex, group = .data$sex)) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_pointrange(ggplot2::aes(ymin = .data$ci_low, ymax = .data$ci_high),
+                             size = 0.35) +
+    ggplot2::facet_wrap(~ protein_class) +
+    scale_sex() +
+    ggplot2::scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                                limits = c(0, 1.08)) +
+    ggplot2::labs(x = NULL, y = "Kept by RNA QC",
+                  title = "How much of each protein-defined stage RNA QC kept",
+                  subtitle = "A fall with age in one library means QC, not the marrow, removed those cells",
+                  caption = "Intervals: Wilson, on cells. Cell counts: protein_gate_retention.csv.") +
+    theme_bm()
 }

@@ -97,6 +97,24 @@ take_whole("stage_assignment_margins.csv",
            "whether stage disagreements are fuzzy or contradictory, per stage")
 take_whole("sex_control_gates.csv", "gate outcomes for the sex contrast")
 take_whole("sex_gene_panel_check.csv", "sex-chromosome genes present in the probe set")
+take_whole("within_library_null.csv", "sex separation per stage against random splits of one library")
+take_whole("depth_matching_targets.csv", "depth ratio per matching stratum, before and after thinning")
+take_whole("interaction_age_sex.csv", "NB-GLM age x sex interaction hits (stage-adjusted)")
+take_whole("pt_age_sex_fitted.csv", "trajectory model fitted values for its hits (step 7B)")
+
+# --- protein gate (step 12) --------------------------------------------------
+take_whole("protein_gate_retention.csv",
+           "share of each protein-defined stage kept by RNA QC, per sex and age")
+take_whole("protein_stage_composition.csv",
+           "stage mix from surface protein, before and after RNA QC")
+take_whole("protein_stage_age_trends.csv", "protein-stage share per age step")
+take_whole("protein_gate_thresholds.csv", "per-library protein gate thresholds")
+take_whole("protein_class_counts.csv", "every protein class, by QC outcome")
+take_whole("protein_vs_rna_stage.csv", "protein class against RNA stage")
+
+# --- step 6 per-stratum age trends: short lists ------------------------------
+for (file in list.files(cfg$paths$tables, "^age_trend_(GMPs|proNeu|preNeu|immature|mature)_(female|male)\\.csv$"))
+  take_whole(file, "genes whose four-age trend beats the permutation null")
 
 # --- per-gene endpoint tables, whole: they are already short ----------------
 # list.files() takes no `perl` argument and its regex engine has no lookahead,
@@ -143,6 +161,19 @@ for (file in list.files(cfg$paths$tables, "^omnibus_")) {
                 "top 500 by the diagnostic statistic")
 }
 
+# --- summary figures (step 13), as PNGs ---------------------------------------
+fig_dir <- file.path(cfg$paths$figures, "summary")
+if (dir.exists(fig_dir)) {
+  out_figs <- file.path(out_dir, "figures")
+  dir.create(out_figs, showWarnings = FALSE)
+  pngs <- list.files(fig_dir, "\\.png$", full.names = TRUE)
+  file.copy(c(pngs, file.path(fig_dir, "FIGURES.md")), out_figs, overwrite = TRUE)
+  record("figures/", "summary figures from step 13 (see figures/FIGURES.md)",
+         length(pngs), length(pngs))
+} else {
+  record("figures/", "summary figures from step 13", 0, 0, "NOT PRODUCED")
+}
+
 # --- manifest ----------------------------------------------------------------
 tbl <- do.call(rbind, manifest)
 tbl <- tbl[order(tbl$file), ]
@@ -169,7 +200,8 @@ lines <- c(
           tbl$description, tbl$note))
 writeLines(lines, file.path(out_dir, "MANIFEST.md"))
 
-size <- sum(file.info(list.files(out_dir, full.names = TRUE))$size, na.rm = TRUE)
+size <- sum(file.info(list.files(out_dir, full.names = TRUE, recursive = TRUE))$size,
+            na.rm = TRUE)
 log_step("wrote ", nrow(tbl), " files to ", out_dir,
          " (", round(size / 1024), " KB)")
 missing <- tbl$file[tbl$note == "NOT PRODUCED"]

@@ -178,9 +178,30 @@ trajectory_by_group <- function(obj, cfg, group_cells, prefix,
   results
 }
 
-#' Genes significant in one group and in none of the others.
-genes_unique_to <- function(gene_lists, target) {
-  setdiff(gene_lists[[target]], unlist(gene_lists[names(gene_lists) != target]))
+#' Moran's I per gene per age, side by side.
+#'
+#' One row per gene, `I_<age>` and `q_<age>` per age, plus the largest
+#' change in I between any two ages. Replaces the per-age "unique genes"
+#' lists, which compared significance across ages with several-fold different
+#' cell numbers and so mostly measured power.
+moran_by_age <- function(results) {
+  tabs <- lapply(names(results), function(age) {
+    m <- results[[age]]$moran
+    data.frame(gene = rownames(m),
+               I = m$morans_I, q = m$q_value,
+               stringsAsFactors = FALSE) |>
+      stats::setNames(c("gene", paste0("I_", age), paste0("q_", age)))
+  })
+  out <- Reduce(function(a, b) merge(a, b, by = "gene", all = TRUE), tabs)
+  i_cols <- grep("^I_", names(out), value = TRUE)
+  i_mat <- as.matrix(out[, i_cols, drop = FALSE])
+  out$I_range <- apply(i_mat, 1, function(x) {
+    x <- x[is.finite(x)]
+    if (length(x) < 2) NA_real_ else max(x) - min(x)
+  })
+  out$n_cells <- paste(vapply(results, function(r) ncol(r$cds), integer(1)),
+                       collapse = "/")
+  out[order(-out$I_range), ]
 }
 
 # ---------------------------------------------------------------------------
@@ -283,7 +304,7 @@ compare_across_ages_by_sex <- function(values, meta, cfg,
     keep <- meta[[sex_col]] == this_sex & meta[[age_col]] %in% age_levels
     keep[is.na(keep)] <- FALSE
     if (sum(keep) < 30) {
-      log_step("skipping ", this_sex, ": ", sum(keep), " cells")
+      if (sum(keep)) log_step("skipping ", this_sex, ": ", sum(keep), " cells")
       next
     }
     log_step("=== ", this_sex, " ===")
@@ -327,26 +348,33 @@ compare_across_ages_within_stage <- function(values, meta, cfg,
   shifts <- list()
 
   for (st in stages) {
-    keep <- !is.na(meta[[stage_col]]) & as.character(meta[[stage_col]]) == st
-    # Checked per age, not in total: a stage with 400 cells at one age and 12
-    # at another cannot support a shift between them.
-    by_age <- table(as.character(meta$age[keep]))
-    by_age <- by_age[intersect(age_levels, names(by_age))]
-    if (!length(by_age) || min(by_age) < min_cells) {
-      log_step("  skipping ", st, ": smallest age has ",
-               if (length(by_age)) min(by_age) else 0, " cells (gate is ",
-               min_cells, ")")
-      next
+    in_stage <- !is.na(meta[[stage_col]]) & as.character(meta[[stage_col]]) == st
+    for (this_sex in cfg$analysis$sex_levels) {
+      keep <- in_stage & !is.na(meta$sex) & meta$sex == this_sex
+      # Gated per sex AND per age. The check used to pool both sexes, so male
+      # mature at 9m (20 cells) was compared because the two sexes together
+      # held 51. An age below the gate is dropped; the reference age has to
+      # clear it, or there is nothing to shift away from.
+      ages <- usable_ages(meta$age[keep], age_levels, min_cells)
+      if (!age_levels[1] %in% ages || length(ages) < 2) {
+        log_step(sprintf("  skipping %s/%s: %s", st, this_sex,
+                         if (!age_levels[1] %in% ages)
+                           paste0("reference age ", age_levels[1], " is below ", min_cells, " cells")
+                         else "no other age clears the gate"))
+        next
+      }
+      keep <- keep & meta$age %in% ages
+      log_step("  --- ", st, " / ", this_sex, " (", paste(ages, collapse = ", "), ") ---")
+      res <- compare_across_ages_by_sex(values[keep], meta[keep, , drop = FALSE], cfg,
+                                        age_levels = ages)
+      key <- paste(st, this_sex)
+      if (!is.null(res$summary)) { res$summary$stage <- st; summaries[[key]] <- res$summary }
+      if (!is.null(res$shifts))  { res$shifts$stage  <- st; shifts[[key]]    <- res$shifts }
     }
-    log_step("  --- ", st, " ---")
-    res <- compare_across_ages_by_sex(values[keep], meta[keep, , drop = FALSE], cfg,
-                                      age_levels = age_levels)
-    if (!is.null(res$summary)) { res$summary$stage <- st; summaries[[st]] <- res$summary }
-    if (!is.null(res$shifts))  { res$shifts$stage  <- st; shifts[[st]]    <- res$shifts }
   }
 
   if (!length(shifts)) {
-    log_step("  no stage had enough cells at every age for a within-stage comparison")
+    log_step("  no stage had enough cells at two ages for a within-stage comparison")
     return(NULL)
   }
   list(summary = do.call(rbind, c(summaries, list(make.row.names = FALSE))),

@@ -88,7 +88,11 @@ docs/               provenance and notes
 | `R/trajectory.R` | monocle3 trajectories and pseudotime correlations |
 | `R/de.R` | age trends, permutation-calibrated DE, NB-GLM tests |
 | `R/gsea.R` | sex x age interaction ranking and GSEA |
-| `R/plots.R` | every figure |
+| `R/composition.R` | stage composition, CLR, the stage-by-age test |
+| `R/depth.R` | depth matching within strata, depth diagnostics |
+| `R/protein_gate.R` | staging from surface protein, before and after RNA QC |
+| `R/plots.R` | the shared figure style, and the figures the steps draw |
+| `R/figures.R` | the summary figures step 13 draws from tables |
 
 ## Pipeline
 
@@ -103,11 +107,17 @@ docs/               provenance and notes
 | 7 | `07_glm_models.R` | NB-GLM omnibus, age x sex interaction, and the trajectory model |
 | 8 | `08_gsea.R` | sex x age interaction GSEA, run within each maturation stage, with sensitivity and per-age checks |
 | 9 | `09_development_shifts.R` | stage composition across age, and where cells sit along the trajectory |
+| 10 | `10_endpoint_contrast.R` | 3m vs 18m genes and gene sets per stage, with their 9m/12m shape |
+| 11 | `11_progenitors.R` | the progenitor compartment: composition, imbalance, 3m vs 18m genes |
+| 12 | `12_protein_gate.R` | stage composition from surface protein, before and after RNA QC |
+| 13 | `13_figures.R` | one summary figure per finding, from the tables alone |
 | - | `diagnose.R` | inspects the saved objects and reports what any later step would fail on |
 
-Steps 1-3 must run in order. Steps 4-9 depend only on step 3, except that
-steps 7 and 9 also use the trajectory built in step 5, so they can be run
-individually as parameters are tuned.
+Steps 1-3 must run in order. Steps 4-12 depend only on step 3, except that
+steps 7 and 9 also use the trajectory built in step 5, and step 12 reads the
+protein records step 1 writes. Step 13 needs no objects at all: it draws from
+`results/tables`, runs in seconds on a laptop, and can be pointed at a results
+bundle (`Rscript scripts/13_figures.R results/summary`).
 
 Step 9 is the one that asks whether *development* moves rather than whether
 expression does — the stage mix and the distribution of cells along

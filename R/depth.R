@@ -49,26 +49,98 @@ downsample_counts <- function(counts, groups, target = "median", seed = 42) {
   thinned
 }
 
+#' Downsample within strata, each toward its own target.
+#'
+#' One global target leaves every cell already below it untouched, so a
+#' population that is shallow by nature -- mature neutrophils, at 330-590 UMIs
+#' against a 2225 target in the male library -- is never matched at all, and
+#' its age or sex comparisons run on counts several-fold apart while the global
+#' depth gate reads 1.00x. Matching inside each stratum (a stage, or a stage
+#' within a sex) sets the target from the groups actually being compared.
+#'
+#' Groups smaller than `min_cells` do not set the target: a median of four
+#' cells is not a depth, and letting it set one would thin a whole stratum to
+#' noise. They are thinned to it like everyone else.
+#'
+#' @param strata one label per cell; NA is treated as its own stratum.
+downsample_within <- function(counts, groups, strata, min_cells = 1, seed = 42) {
+  require_packages("DropletUtils")
+  strata <- ifelse(is.na(strata), "<unassigned>", as.character(strata))
+  totals <- Matrix::colSums(counts)
+  prop <- rep(1, ncol(counts))
+  targets <- list()
+
+  for (st in unique(strata)) {
+    idx <- which(strata == st)
+    g <- groups[idx]
+    sizes <- table(g)
+    eligible <- names(sizes)[sizes >= min_cells]
+    if (!length(eligible)) eligible <- names(sizes)
+    med <- vapply(eligible, function(x) stats::median(totals[idx][g == x]), numeric(1))
+    target <- min(med)
+    prop[idx] <- pmin(1, target / pmax(totals[idx], 1))
+    targets[[st]] <- data.frame(stratum = st, target = target,
+                                set_by = names(which.min(med)),
+                                n_cells = length(idx),
+                                n_thinned = sum(prop[idx] < 1),
+                                ratio_before = max(med) / min(med),
+                                stringsAsFactors = FALSE)
+  }
+
+  set.seed(seed)
+  thinned <- DropletUtils::downsampleMatrix(counts, prop = prop, bycol = TRUE)
+  report <- do.call(rbind, targets)
+  report$ratio_after <- vapply(report$stratum, function(st) {
+    idx <- which(strata == st)
+    g <- groups[idx]
+    sizes <- table(g)
+    keep <- names(sizes)[sizes >= min_cells]
+    if (length(keep) < 2) return(NA_real_)
+    sub_idx <- idx[g %in% keep]
+    depth_ratio(thinned[, sub_idx, drop = FALSE], groups[sub_idx])
+  }, numeric(1))
+  attr(thinned, "targets") <- report
+  thinned
+}
+
 #' Attach a depth-matched counts layer to a Seurat object.
 #'
 #' Written to a separate assay rather than overwriting RNA, so the unmatched
 #' counts stay available for the comparison that shows what matching changed.
-add_matched_assay <- function(obj, cfg, group_col = "sex", assay_name = "RNAmatched") {
+#'
+#' @param within_cols metadata columns defining the strata matched separately
+#'   (see downsample_within()). NULL matches all cells toward one target, the
+#'   old behaviour.
+add_matched_assay <- function(obj, cfg, group_col = "sex", assay_name = "RNAmatched",
+                              within_cols = NULL) {
   counts <- Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")
   groups <- as.character(obj[[group_col]][, 1])
 
   before <- depth_ratio(counts, groups)
-  log_step(sprintf("depth ratio between %s groups before matching: %.2fx",
-                   group_col, before))
+  log_step(sprintf("%s: depth ratio between %s groups before matching: %.2fx",
+                   assay_name, group_col, before))
 
-  thinned <- downsample_counts(counts, groups, cfg$depth$target, cfg$seed)
+  if (length(within_cols)) {
+    strata <- do.call(paste, c(lapply(within_cols, function(col)
+      as.character(obj[[col]][, 1])), sep = " | "))
+    thinned <- downsample_within(counts, groups, strata,
+                                 min_cells = cfg$gates$min_cells_per_stratum,
+                                 seed = cfg$seed)
+    targets <- attr(thinned, "targets")
+    log_step("  matched within ", paste(within_cols, collapse = " x "),
+             ", each stratum toward its own shallowest ", group_col, " group:")
+    print(targets[order(targets$stratum), ], row.names = FALSE)
+    attr(obj, paste0(assay_name, "_targets")) <- targets
+  } else {
+    thinned <- downsample_counts(counts, groups, cfg$depth$target, cfg$seed)
+    log_step(sprintf("  depth ratio after matching: %.2fx",
+                     attr(thinned, "depth_ratio_after")))
+  }
+
   obj[[assay_name]] <- Seurat::CreateAssayObject(counts = thinned)
   Seurat::DefaultAssay(obj) <- assay_name
   obj <- Seurat::NormalizeData(obj, assay = assay_name, verbose = FALSE)
   Seurat::DefaultAssay(obj) <- "RNA"
-
-  log_step(sprintf("depth ratio after matching: %.2fx",
-                   attr(thinned, "depth_ratio_after")))
   obj
 }
 
@@ -277,20 +349,24 @@ report_depth_by_age <- function(tbl, cfg,
   invisible(tbl)
 }
 
-#' Which assay a step should read: the shared matched one, or raw RNA.
+#' Which assay a step should read: a depth-matched one, or raw RNA.
 #'
-#' Returns "RNAmatched" only when the config asks for matching, the step is
-#' listed in depth.matched_steps, and the assay is actually on the object.
-#' A step that expects matched counts and does not find them says so rather
-#' than silently analysing unmatched ones -- that difference is the whole
-#' point of the assay.
-matched_assay_for <- function(obj, cfg, step, assay_name = "RNAmatched") {
+#' Two matched assays are built in step 3. RNAmatched equalises the AGES
+#' within each sex and stage, which is what every within-sex age comparison
+#' needs. RNAmatched_sex equalises every age x sex group within each stage,
+#' which is what a comparison ACROSS the two libraries needs; the steps in
+#' depth.cross_sex_steps read it. A step that expects matched counts and does
+#' not find them says so rather than silently analysing unmatched ones.
+matched_assay_for <- function(obj, cfg, step, assay_name = NULL) {
   wanted <- isTRUE(cfg$depth$match) &&
     step %in% unlist(cfg$depth$matched_steps %||% list())
   if (!wanted) {
     log_step("step ", step, " reads the RNA assay (not in depth.matched_steps)")
     return("RNA")
   }
+  assay_name <- assay_name %||%
+    if (step %in% unlist(cfg$depth$cross_sex_steps %||% list())) "RNAmatched_sex"
+    else "RNAmatched"
   if (!assay_name %in% assay_names(obj))
     stop("step ", step, " is configured to use depth-matched counts, but '",
          assay_name, "' is not on this object.\n",

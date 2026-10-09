@@ -193,6 +193,45 @@ add_doublet_calls <- function(obj) {
   obj
 }
 
+#' Why each cell would be kept or removed, without removing anything.
+#'
+#' One label per cell, first failing reason wins, in the order the filter
+#' applies them. filter_cells() keeps exactly the cells labelled "pass", so
+#' the protein record step 1 saves before filtering describes the same
+#' decision the filter makes -- it cannot drift from it.
+#'
+#' The MAD thresholds are computed on singlets only, as before: they should
+#' describe real single cells, not doublets or unassigned droplets.
+qc_status <- function(obj, cfg, hashtags, batch_col = "sex") {
+  require_metadata(obj, c("age", "MULTI_ID", "scDblFinder.class",
+                          "log10GenesPerUMI", "mitoRatio", "percent.hb"),
+                   context = "QC status")
+  status <- rep("pass", ncol(obj))
+  names(status) <- colnames(obj)
+
+  status[!obj$MULTI_ID %in% hashtags] <- "hashtag: not a sample"
+  status[status == "pass" & is.na(obj$age)] <- "hashtag: no age"
+  status[status == "pass" & obj$scDblFinder.class != "singlet"] <- "doublet"
+
+  singlets <- names(status)[status == "pass"]
+  if (length(singlets)) {
+    sub <- subset(obj, cells = singlets)
+    discard <- if (identical(cfg$qc$method, "mad")) {
+      mad_outliers(sub, cfg, batch_col)
+    } else {
+      !(sub$log10GenesPerUMI > cfg$qc$min_log10_genes_per_umi)
+    }
+    status[singlets[discard]] <- "RNA QC: count/feature outlier"
+  }
+  # A missing ratio counts as a failure, as it did in select_cells(); written
+  # out so no NA reaches a logical subscript, which R refuses to assign through.
+  high_mito <- is.na(obj$mitoRatio) | obj$mitoRatio >= cfg$qc$max_mito_ratio
+  high_hb <- is.na(obj$percent.hb) | obj$percent.hb >= cfg$qc$max_percent_hb
+  status[status == "pass" & high_mito] <- "RNA QC: mitochondrial"
+  status[status == "pass" & high_hb] <- "RNA QC: haemoglobin"
+  status
+}
+
 #' Apply QC thresholds, computed per library.
 #'
 #' A global nFeature/nCount cutoff is the wrong instrument here. Mature
@@ -205,36 +244,50 @@ add_doublet_calls <- function(obj) {
 #' scuttle's MAD approach sets the threshold from each library's own
 #' distribution, so "outlier" means outlying for that library rather than
 #' relative to the deeper one.
-filter_cells <- function(obj, cfg, hashtags, batch_col = "sex") {
-  require_metadata(obj, c("age", "MULTI_ID", "scDblFinder.class",
-                          "log10GenesPerUMI", "mitoRatio", "percent.hb"),
-                   context = "QC filtering")
+#'
+#' @param status a qc_status() vector, when the caller already computed one.
+filter_cells <- function(obj, cfg, hashtags, batch_col = "sex", status = NULL) {
+  status <- status %||% qc_status(obj, cfg, hashtags, batch_col)
   n_before <- ncol(obj)
-
-  # Demultiplexing and doublets first: these are not depth-driven, and the MAD
-  # thresholds should be computed on real single cells.
-  obj <- select_cells(obj, list(
-    "hashtag call is a real sample" = obj$MULTI_ID %in% hashtags,
-    "age was assigned"              = !is.na(obj$age),
-    "singlet"                       = obj$scDblFinder.class == "singlet"
-  ), context = "demultiplexing and doublets")
-
-  discard <- if (identical(cfg$qc$method, "mad")) {
-    mad_outliers(obj, cfg, batch_col)
-  } else {
-    log_step("  QC method 'fixed': global thresholds (see qc.method in the config)")
-    !(obj$log10GenesPerUMI > cfg$qc$min_log10_genes_per_umi)
-  }
+  log_step("QC status of every barcode:")
+  print(sort(table(status), decreasing = TRUE))
 
   obj <- select_cells(obj, list(
-    "not a per-library count/feature outlier" = !discard,
-    "mitoRatio below cutoff"  = obj$mitoRatio < cfg$qc$max_mito_ratio,
-    "percent.hb below cutoff" = obj$percent.hb < cfg$qc$max_percent_hb
-  ), context = "QC thresholds")
+    "passes demultiplexing, doublet and RNA QC" = unname(status[colnames(obj)] == "pass")
+  ), context = "QC")
 
   log_step(sprintf("cell filtering: %d -> %d cells retained (%.1f%% kept)",
                    n_before, ncol(obj), ncol(obj) / n_before * 100))
   obj
+}
+
+#' The surface-protein record of every hashtagged cell, saved before QC.
+#'
+#' RNA QC removes the cells with the least RNA, and mature neutrophils are the
+#' cells with the least RNA -- so whether the male library loses mature cells
+#' with age, or QC removes them, cannot be answered from the filtered object.
+#' Surface protein does not depend on RNA capture. Keeping it for the removed
+#' cells lets step 12 stage them by protein and count what QC took.
+#'
+#' Small by design: the isotype-centred ADT matrix (a few dozen antibodies)
+#' and the metadata that says why each cell was or was not kept.
+protein_record <- function(obj, status, sample_cfg) {
+  keep <- !status %in% c("hashtag: not a sample", "hashtag: no age")
+  cells <- colnames(obj)[keep]
+  meta <- data.frame(
+    barcode = cells,
+    sex = sample_cfg$sex,
+    age = as.character(obj$age[keep]),
+    qc_status = unname(status[keep]),
+    nCount_RNA = obj$nCount_RNA[keep],
+    nFeature_RNA = obj$nFeature_RNA[keep],
+    nCount_ADT = Matrix::colSums(Seurat::GetAssayData(obj, assay = "ADT",
+                                                      layer = "counts"))[cells],
+    mitoRatio = obj$mitoRatio[keep],
+    stringsAsFactors = FALSE)
+  list(sample_id = sample_cfg$sample_id, sex = sample_cfg$sex,
+       adt = as.matrix(Seurat::GetAssayData(obj, assay = "ADT", layer = "data"))[, cells, drop = FALSE],
+       meta = meta)
 }
 
 #' Per-library median-absolute-deviation outlier calls.

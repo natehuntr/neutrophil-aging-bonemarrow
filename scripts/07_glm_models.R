@@ -4,9 +4,10 @@
 #
 #   Rscript scripts/07_glm_models.R
 #
-# Part A, cell-level omnibus test in differentiated neutrophils:
-#   - per sex:  ~ age      vs ~ 1          ("does this gene change with age")
-#   - joint:    ~ age*sex  vs ~ age + sex  ("does it change differently")
+# Part A, cell-level omnibus test in differentiated neutrophils, with stage as
+# a covariate so a shift in the stage mix cannot pass for an age effect:
+#   - per sex:  ~ stage + age      vs ~ stage              ("changes with age")
+#   - joint:    ~ stage + age*sex  vs ~ stage + age + sex  ("changes differently")
 #
 # Part B, the same question along the trajectory: does a gene's developmental
 # profile differ by age, by sex, or in shape.
@@ -42,21 +43,34 @@ n_perm <- cfg$glm_de$n_perm
 gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
 glm_assay <- matched_assay_for(gmp_neu, cfg, step = 7)
 
-require_metadata(gmp_neu, c("CytoTRACE2_Potency", "age", "sex"), context = "step 7")
+require_metadata(gmp_neu, c("CytoTRACE2_Potency", "age", "sex", "stage"),
+                 context = "step 7")
 
 neus <- select_cells(gmp_neu, list(
   "CytoTRACE2_Potency is Differentiated" = gmp_neu$CytoTRACE2_Potency == "Differentiated",
-  "age is one of analysis.age_levels"    = gmp_neu$age %in% age_levels
+  "age is one of analysis.age_levels"    = gmp_neu$age %in% age_levels,
+  "stage is assigned"                    = !is.na(gmp_neu$stage)
 ), context = "differentiated neutrophils")
 neus <- join_layers(neus)
 Seurat::DefaultAssay(neus) <- glm_assay
 
-meta <- neus@meta.data[, c("age", "sex")]
+# Stage is a covariate in every Part A model. Without it, these models pooled
+# stages whose mix moves with age in opposite directions in the two sexes, and
+# the top interaction hits were maturation genes (Mmp8, Mmp9, Retnlg) -- the
+# composition shift reported as a per-gene effect. Stages too sparse to
+# estimate an offset are dropped rather than given an unstable coefficient.
+meta <- neus@meta.data[, c("age", "sex", "stage")]
 meta$age <- factor(as.character(meta$age), levels = age_levels)
 meta$sex <- factor(as.character(meta$sex), levels = cfg$analysis$sex_levels)
+stage_n <- table(as.character(meta$stage))
+meta$stage <- as.character(meta$stage)
+meta$stage[meta$stage %in% names(stage_n)[stage_n < cfg$gates$min_cells_per_stratum]] <- NA
+log_step("stages as covariate: ", paste(names(stage_n), stage_n, sep = "=", collapse = ", "))
+meta$stage <- factor(meta$stage, levels = intersect(cfg$analysis$stage_levels,
+                                                   unique(meta$stage)))
 
 counts <- Seurat::GetAssayData(neus, assay = glm_assay, layer = "counts")
-ok <- !is.na(meta$age) & !is.na(meta$sex)
+ok <- !is.na(meta$age) & !is.na(meta$sex) & !is.na(meta$stage)
 counts <- counts[, ok]
 meta <- droplevels(meta[ok, ])
 print(table(meta$sex, meta$age))
@@ -70,10 +84,20 @@ is_female <- meta$sex == "female"
 is_male <- meta$sex == "male"
 
 log_step("fitting observed models")
+# A stage present in only one level of the factor it sits beside cannot be
+# estimated; with one stage left, the covariate is a constant and is dropped.
+stage_term <- function(m) if (nlevels(droplevels(m$stage)) > 1) "stage + " else ""
+f_age  <- function(m) stats::as.formula(paste("~", stage_term(m), "age"))
+f_none <- function(m) stats::as.formula(if (nzchar(stage_term(m))) "~ stage" else "~ 1")
+f_int  <- function(m) stats::as.formula(paste("~", stage_term(m), "age * sex"))
+f_add  <- function(m) stats::as.formula(paste("~", stage_term(m), "age + sex"))
+
+meta_f <- droplevels(meta[is_female, ])
+meta_m <- droplevels(meta[is_male, ])
 fits <- list(
-  female = glm_lrt(counts[, is_female], droplevels(meta[is_female, ]), ~ age, ~ 1),
-  male   = glm_lrt(counts[, is_male],   droplevels(meta[is_male, ]),   ~ age, ~ 1),
-  interaction = glm_lrt(counts, meta, ~ age * sex, ~ age + sex)
+  female = glm_lrt(counts[, is_female], meta_f, f_age(meta_f), f_none(meta_f)),
+  male   = glm_lrt(counts[, is_male],   meta_m, f_age(meta_m), f_none(meta_m)),
+  interaction = glm_lrt(counts, meta, f_int(meta), f_add(meta))
 )
 # All three spend the same degrees of freedom, which is what makes their
 # thresholds comparable.
@@ -81,12 +105,14 @@ expected_df <- length(age_levels) - 1
 stopifnot(vapply(fits, function(f) all(f$res$df1 == expected_df), logical(1)))
 
 log_step("permuting (", n_perm, " refits per model)")
+# Age is shuffled WITHIN stage, so the null keeps the stage x age structure
+# the covariate absorbs and destroys only the within-stage age effect.
 nulls <- list(
-  female = permutation_null(counts[, is_female], droplevels(meta[is_female, ]),
-                            ~ age, ~ 1, shuffle_age, n_perm),
-  male   = permutation_null(counts[, is_male], droplevels(meta[is_male, ]),
-                            ~ age, ~ 1, shuffle_age, n_perm),
-  interaction = permutation_null(counts, meta, ~ age * sex, ~ age + sex,
+  female = permutation_null(counts[, is_female], meta_f, f_age(meta_f), f_none(meta_f),
+                            shuffle_age_within_stage, n_perm),
+  male   = permutation_null(counts[, is_male], meta_m, f_age(meta_m), f_none(meta_m),
+                            shuffle_age_within_stage, n_perm),
+  interaction = permutation_null(counts, meta, f_int(meta), f_add(meta),
                                  shuffle_sex_within_age, n_perm)
 )
 
@@ -106,7 +132,8 @@ tables <- list(
 # how much of the interaction signal survives without it.
 middle <- age_levels[2]
 sub <- meta$age != middle
-no_middle <- glm_lrt(counts[, sub], droplevels(meta[sub, ]), ~ age * sex, ~ age + sex)
+meta_nm <- droplevels(meta[sub, ])
+no_middle <- glm_lrt(counts[, sub], meta_nm, f_int(meta_nm), f_add(meta_nm))
 robust_interaction <- intersect(tables$interaction$name,
                                 no_middle$res$name[no_middle$res$pval < 0.05])
 
@@ -158,7 +185,15 @@ combined_cds <- combined_cds[, in_span]
 cd <- droplevels(cd[in_span, ])
 print(table(cd$sex, cd$age))
 
-cts <- SingleCellExperiment::counts(combined_cds)
+# Counts from the cross-library matched assay, not from the trajectory object.
+# The trajectory is built on RNAmatched, which equalises ages within each sex
+# but leaves the two libraries at their own depths; this model contrasts them.
+cts <- Seurat::GetAssayData(gmp_neu, assay = glm_assay, layer = "counts")
+missing_cells <- setdiff(colnames(combined_cds), colnames(cts))
+if (length(missing_cells))
+  stop(length(missing_cells), " trajectory cells are not on gmp_neutrophils.rds; ",
+       "steps 3 and 5 were run on different objects. Re-run step 5.")
+cts <- cts[, colnames(combined_cds)]
 cts <- cts[Matrix::rowSums(cts > 0) >= cfg$glm_de$min_cells_detected, ]
 log_step(sprintf("%d genes x %d cells", nrow(cts), ncol(cts)))
 

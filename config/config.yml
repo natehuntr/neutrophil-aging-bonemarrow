@@ -88,6 +88,12 @@ compute:
   # future.
   cores: 4
 
+figures:
+  # Every PDF figure also gets a PNG at this resolution. The PNGs are what
+  # the report embeds and what scripts/collect_results.R bundles.
+  png: true
+  dpi: 150
+
 paths:
   cellranger_root: data/per_sample_outs
   raw_matrix_dir: sample_raw_feature_bc_matrix
@@ -186,16 +192,29 @@ depth:
   match: true
   # "median" downsamples every cell toward the lowest group median.
   target: median
-  # Which strata are equalised when the shared RNAmatched assay is built in
-  # step 3. age_sex is the finest grouping any downstream step compares
-  # across -- step 4 contrasts sexes, steps 6 and 9 contrast ages within a
-  # sex -- so matching on it serves all three, and is never less conservative
-  # than matching on sex alone.
+  # The groups equalised inside each stratum of RNAmatched_sex. RNAmatched
+  # equalises ages within each sex instead.
   match_on: age_sex
-  # Steps that read RNAmatched instead of RNA. Step 5 is listed separately
-  # because rebuilding the trajectory on matched counts costs ~3.5 hours and
-  # step 9's pseudotime comes from it.
+  # Two matched assays are built in step 3, each stratum thinned toward its
+  # OWN shallowest group. One global target left every cell already below it
+  # alone, so the shallow strata -- male mature neutrophils, 330-590 UMIs
+  # against a 2225 target -- were never matched, and their comparisons ran on
+  # counts several-fold apart while the global gate read 1.00x.
+  #
+  #   RNAmatched      ages equalised within each sex x stage. Every
+  #                   within-sex age comparison reads this.
+  #   RNAmatched_sex  every age x sex group equalised within each stage. The
+  #                   comparisons across the two libraries read this.
+  match_within: [stage]
+  # Steps that read a matched assay instead of RNA. Step 5 is listed
+  # separately because rebuilding the trajectory on matched counts costs ~3.5
+  # hours and step 9's pseudotime comes from it.
   matched_steps: [4, 6, 7, 8, 10, 11]
+  # Of those, the ones contrasting the two libraries, which read
+  # RNAmatched_sex. Step 7 is here because its interaction model needs both
+  # sexes on one depth; step 8 because its ranking contrasts the sexes'
+  # trends.
+  cross_sex_steps: [4, 7, 8]
   match_trajectory: true
   # Re-score CytoTRACE2 on the matched counts in step 3. Of everything here it
   # is the measure most directly exposed to depth, since it reads
@@ -363,7 +382,10 @@ stage_assignment:
   adt_panels:
     GMPs:     {high: [Ms.CD117], low: [Ms.Ly.6G, Ms.CD11b]}
     proNeu:   {high: [Ms.CD117, Ms.CD11b], low: [Ms.Ly.6G]}
-    preNeu:   {high: [Ms.Ly.6G, Ms.CD11b], low: [Ms.CD101, Ms.CXCR2]}
+    # preNeus are Ly6G-low/intermediate (Evrard et al. 2018), so Ly6G is in
+    # neither list. Listing it as "high" sent RNA-preNeu cells, which are
+    # Ly6G-low, to the proNeu panel: 635 of the 1110 RNA preNeus it labelled.
+    preNeu:   {high: [Ms.CD11b], low: [Ms.CD101, Ms.CXCR2]}
     immature: {high: [Ms.Ly.6G, Ms.CD101], low: [Ms.CXCR2]}
     mature:   {high: [Ms.Ly.6G, Ms.CD101, Ms.CXCR2, Ms.CD177], low: []}
   # Panel naming varies by vendor; each entry maps a canonical name to the
@@ -438,13 +460,14 @@ gsea:
   # them pooled: if the immature fraction changes with age, a gene that is
   # simply higher in immature cells shows an age trend in the pooled data
   # while changing within neither stage.
-  stages: [mature, immature]
-  # 9m is dropped HERE ONLY. This contrast needs a per-sex age trend within a
-  # single stage, and the 9m male strata hold 20 (mature) and 22 (immature)
-  # cells -- below gates.min_cells_per_stratum, so every stage was skipped and
-  # the step produced nothing twice. The other steps use all four ages; this
-  # is a cell-count fact about one contrast, not a weakened threshold.
-  age_levels: [3m, 12m, 18m]
+  stages: [GMPs, preNeu, immature, mature]
+  # Candidate ages. Each stage keeps only those at which BOTH sexes clear
+  # gates.min_cells_per_stratum -- the interaction compares the two sexes'
+  # trends over the same ages. With the current data that is all four for
+  # GMPs, 3m/12m/18m for preNeu and 3m/18m for immature and mature. Requiring
+  # every age to clear the gate instead retired both mature and immature
+  # (male 12m holds 24 and 34 cells), and this step produced nothing.
+  age_levels: [3m, 9m, 12m, 18m]
   min_pct_cells: 0.05
   min_set_size: 15
   max_set_size: 500

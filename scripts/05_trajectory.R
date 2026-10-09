@@ -11,7 +11,8 @@
 # Writes: results/tables/<sex>_<age>_trajectory_moran.csv
 #         results/tables/<sex>_<age>_pseudotime_spearman.csv
 #         results/objects/combined_cds.rds, <sex>_GAM.rds
-#         results/figures/<sex>_trajectory_genes_venn.pdf
+#         results/tables/<sex>_trajectory_moran_by_age.csv
+#         results/figures/<sex>_trajectory_moran_by_age.pdf
 #
 # The trajectory root is chosen programmatically from the GMP cluster (see
 # R/trajectory.R), so this script runs unattended. In an interactive session
@@ -62,18 +63,21 @@ for (sex in cfg$analysis$sex_levels) {
   results <- trajectory_by_group(gmp_neu, cfg, cells_by_age, prefix = sex,
                                  root_group = "GMPs", assay = traj_assay)
 
-  # Significantly graph-associated genes, per age, for the overlap plot.
+  # Significantly graph-associated genes, per age: the gene universe for the
+  # GAM fits below.
   sig <- lapply(results, function(r) rownames(r$moran)[r$moran$q_value < 0.05])
   moran_lists[[sex]] <- sig
 
-  save_figure(plot_gene_venn(sig, title = paste0(sex, ": trajectory genes by age")),
-              cfg, paste0(sex, "_trajectory_genes_venn.pdf"), width = 6, height = 6)
-
-  for (age in names(sig)) {
-    unique_genes <- genes_unique_to(sig, age)
-    write_table(data.frame(gene = unique_genes), cfg,
-                sprintf("%s_%s_trajectory_genes_unique.csv", sex, age))
-  }
+  # Compared as EFFECT SIZES across ages, not as overlapping significance
+  # lists. The ages differ several-fold in cell number, so a gene "unique to
+  # 3m" by significance was mostly a statement about which age had the most
+  # cells -- a power comparison read as biology. Moran's I is the strength of
+  # a gene's structure along the graph, comparable across ages whatever n is.
+  by_age <- moran_by_age(results)
+  write_table(by_age, cfg, sprintf("%s_trajectory_moran_by_age.csv", sex))
+  p <- plot_moran_by_age(by_age, age_levels, title = paste0(sex, ": trajectory structure by age"))
+  if (!is.null(p))
+    save_figure(p, cfg, paste0(sex, "_trajectory_moran_by_age.pdf"), width = 9, height = 8)
 }
 
 # --- 2. Combined trajectory across both sexes ------------------------------

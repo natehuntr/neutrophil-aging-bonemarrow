@@ -67,10 +67,10 @@ log_step("depth ratio before matching: ",
 detection <- detection_rates(counts, groups)
 write_confound_diagnostics(obj, cfg, detection = detection)
 
-# Built in step 3 on depth.match_on (age_sex), which is finer than the sex
-# grouping this step contrasts, so it is never less conservative here.
+# RNAmatched_sex, built in step 3: every age x sex group thinned toward the
+# shallowest within each stage, so the per-stage strata below are matched.
 matched_assay <- matched_assay_for(obj, cfg, step = 4)
-if (!identical(matched_assay, "RNAmatched"))
+if (identical(matched_assay, "RNA"))
   stop("step 4 cannot run on unmatched counts: the depth-matched assay IS the ",
        "analysis. Put 4 back in depth.matched_steps.")
 matched_counts <- Seurat::GetAssayData(obj, assay = matched_assay, layer = "counts")
@@ -99,8 +99,8 @@ testable <- names(gs)[suggest_orthogonal_assay(names(gs)) != "none proposed -- n
 gs <- gs[testable]
 log_step(length(gs), " gene sets have a proposed orthogonal assay")
 
-Seurat::DefaultAssay(obj) <- "RNAmatched"
-obj <- add_module_scores_ucell(obj, gs, assay = "RNAmatched")
+Seurat::DefaultAssay(obj) <- matched_assay
+obj <- add_module_scores_ucell(obj, gs, assay = matched_assay)
 # Name the columns from the sets that were just scored rather than grepping the
 # suffix: other steps leave their own UCell scores on the object, and a grep
 # would sweep those in as candidate modules.

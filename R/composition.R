@@ -33,10 +33,20 @@ stage_composition <- function(obj, cfg,
                               sex_col = "sex",
                               age_levels = cfg$analysis$age_levels,
                               levels = cfg$analysis$stage_levels) {
+  composition_from_labels(as.character(obj[[stage_col]][, 1]),
+                          as.character(obj[[age_col]][, 1]),
+                          as.character(obj[[sex_col]][, 1]),
+                          levels = levels, age_levels = age_levels,
+                          sex_levels = cfg$analysis$sex_levels)
+}
+
+#' The same table from plain vectors, for callers with no Seurat object (the
+#' protein gate in step 12 works on the pre-QC protein record).
+composition_from_labels <- function(stage, age, sex, levels, age_levels, sex_levels) {
   meta <- data.frame(
-    stage = factor(as.character(obj[[stage_col]][, 1]), levels = levels),
-    age   = factor(as.character(obj[[age_col]][, 1]), levels = age_levels),
-    sex   = factor(as.character(obj[[sex_col]][, 1]), levels = cfg$analysis$sex_levels)
+    stage = factor(stage, levels = levels),
+    age   = factor(age, levels = age_levels),
+    sex   = factor(sex, levels = sex_levels)
   )
   meta <- meta[stats::complete.cases(meta), ]
 
@@ -48,6 +58,7 @@ stage_composition <- function(obj, cfg,
   names(totals)[3] <- "n_group"
 
   out <- merge(counts, totals, by = c("sex", "age"))
+  out <- out[out$n_group > 0, ]
   out$proportion <- out$n / out$n_group
   ci <- wilson_interval(out$n, out$n_group)
   out$ci_low <- ci$lower

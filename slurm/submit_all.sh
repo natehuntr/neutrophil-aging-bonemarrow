@@ -15,8 +15,12 @@
 #                +-> 8
 #                +-> 10
 #                +-> 11
+#                +-> 12          (protein gate; also needs step 1's records)
 #                +-> 5 -+-> 7
 #                       +-> 9
+#   13 (figures) runs after all of the above have finished, pass or fail.
+#   A step left in DependencyNeverSatisfied never finishes: scancel it and
+#   step 13 starts.
 #
 # Steps 4, 6 and 8 start together once 3 lands; 7 and 9 once 5 does. Each job
 # runs with `afterok`, so a failure stops that branch instead of feeding a
@@ -81,12 +85,14 @@ resources_for() {
     3) echo "--time=08:00:00 --mem=96G  --cpus-per-task=4" ;;
     4) echo "--time=12:00:00 --mem=48G  --cpus-per-task=4" ;;  # null model refits
     5) echo "--time=24:00:00 --mem=64G  --cpus-per-task=8" ;;
-    6) echo "--time=12:00:00 --mem=48G  --cpus-per-task=4" ;;
+    6) echo "--time=24:00:00 --mem=48G  --cpus-per-task=4" ;;  # RNA + ADT, every stage
     7) echo "--time=48:00:00 --mem=64G  --cpus-per-task=8" ;;
     8) echo "--time=06:00:00 --mem=32G  --cpus-per-task=4" ;;
     9) echo "--time=02:00:00 --mem=32G  --cpus-per-task=4" ;;
     10) echo "--time=08:00:00 --mem=48G  --cpus-per-task=4" ;;  # permutation per stratum
     11) echo "--time=08:00:00 --mem=96G  --cpus-per-task=4" ;;  # reads the full merged object
+    12) echo "--time=01:00:00 --mem=32G  --cpus-per-task=2" ;;  # protein records + gmp_neutrophils
+    13) echo "--time=00:30:00 --mem=8G   --cpus-per-task=1" ;;  # tables only
   esac
 }
 
@@ -100,6 +106,8 @@ depends_on() {
     7|9) echo "5" ;;
     10) echo "3" ;;
     11) echo "3" ;;
+    12) echo "3" ;;   # needs step 1's protein records and step 3's stages
+    13) echo "4 6 7 8 9 10 11 12" ;;   # draws from every table
   esac
 }
 
@@ -168,7 +176,7 @@ fi
 
 declare -A JOB_ID=()
 
-for step in 1 2 3 4 5 6 7 8 9 10 11; do
+for step in 1 2 3 4 5 6 7 8 9 10 11 12 13; do
   wanted "$step" || continue
 
   dep_args=""
@@ -178,7 +186,12 @@ for step in 1 2 3 4 5 6 7 8 9 10 11; do
       dep_list="${dep_list}${dep_list:+:}${JOB_ID[$dep]}"
     fi
   done
-  [[ -n "$dep_list" ]] && dep_args="--dependency=afterok:${dep_list}"
+  # Step 13 draws whatever tables exist, so it waits for the others to FINISH
+  # (afterany) rather than to succeed: one failed step should cost its own
+  # figures, not all of them.
+  dep_kind=afterok
+  [[ "$step" == 13 ]] && dep_kind=afterany
+  [[ -n "$dep_list" ]] && dep_args="--dependency=${dep_kind}:${dep_list}"
 
   # --export=ALL already carries the submitting environment; naming these
   # explicitly means they work even if the caller set them without exporting.

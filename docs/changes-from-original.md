@@ -211,3 +211,54 @@ packaging rather than analysis, the fifth was a genuine data-corrupting bug.
   collapses an entire multi-condition filter without error. `select_cells()`
   now reports a per-condition breakdown and treats a zero-length condition as
   its own error.
+
+## October 2026 review
+
+Found by reading every module against the results it had produced. Several
+were silent: a step that "completed" and wrote nothing, or wrote numbers from
+the wrong counts.
+
+- **Step 6 part B never produced output once 9m was restored.** `age_changing()`
+  was written for three ages: its shape matrix had three columns and was given
+  four names. Separately, `stage_subset()` retired any stratum with one age
+  under 50 cells, and 9m is thin in every stratum, so the loop skipped
+  everything before reaching that line. The `age_changing_*` tables in the
+  results were from 4 Sep. Now: any number of ages, every pairwise
+  comparison kept, thin ages dropped per stratum (the `ages` column says
+  which), all five stages, RNA on the matched assay and ADT.
+- **Step 6's male-vs-female rho comparison never ran.** It read `$trend_df`
+  from a result that names the table `$trend`.
+- **Step 8 skipped both stages, and would have crashed if it had not.** It
+  required every sex x age group to clear the cell gate (male 12m holds 24
+  mature and 34 immature cells), and its per-age check asked for 9m cells
+  after filtering them out. It also computed the per-sex trends on unmatched
+  RNA while logging the matched assay. Now: each stage keeps the ages both
+  sexes support (all four for GMPs, 3m/12m/18m for preNeu, 3m/18m for
+  immature and mature), four stages, matched counts, and sex-chromosome
+  genes are reported separately and removed from the ranking.
+- **Within-stage pseudotime and potency shifts pooled the sexes for the cell
+  gate**, so male mature at 9m (20 cells) was compared because the two sexes
+  held 51 together. Gated per sex and per age now.
+- **Step 7 part A pooled stages** whose mix moves in opposite directions in the
+  two sexes, so its top interaction genes (Mmp8, Mmp9, Retnlg) were the stage
+  shift. Stage is now a covariate in every Part A model, with age shuffled
+  within stage for the null. Part B reads the cross-library matched counts.
+- **Depth matching never reached the shallow strata.** One target for all cells
+  (2225 UMIs) left every cell below it alone, so male mature cells (330-590)
+  were unmatched and their age and sex comparisons ran several-fold apart
+  while the global gate read 1.00x. Two assays now, each thinned toward the
+  shallowest group within its stratum: `RNAmatched` (ages within sex x stage)
+  and `RNAmatched_sex` (age x sex within stage, for steps 4, 7, 8). Targets are
+  written to `depth_matching_targets.csv`.
+- **The ADT preNeu panel required high Ly6G.** preNeus are Ly6G-low, which is
+  why 635 RNA preNeus were called proNeu by protein.
+- **Step 5's "genes unique to each age" compared power, not biology** (ages
+  differ several-fold in cells). Replaced by Moran's I per age side by side
+  (`<sex>_trajectory_moran_by_age.csv`) and a figure.
+- **`analysis/report.qmd` could not render**: it referred to a removed column,
+  a removed script and a config key that never existed. Rebuilt around the
+  summary figures.
+
+Added: the protein gate (step 12, with step 1 now saving the protein record of
+every hashtagged cell before QC), and step 13, which draws one figure per
+finding from the tables alone.
