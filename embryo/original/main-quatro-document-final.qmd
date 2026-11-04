@@ -1,0 +1,1850 @@
+---
+title: "Beyond immunity: Mid-gestation neutrophils prioritise homeostasis over immune function in the mouse embryo"
+format: html
+editor: visual
+---
+
+```{r}
+#| eval: false
+
+renv::snapshot()
+```
+
+```{r}
+#| eval: false
+#| output: false
+
+packages <- c("harmony", "tidyverse", "Seurat", "SingleCellExperiment", "SingleR", 
+              "scDblFinder", "Matrix", "data.table", "AnnotationDbi", "biomaRt", 
+              "celldex", "clustree", "CytoTRACE2", "dittoSeq","garnett", "GEOquery", 
+              "monocle3", "org.Mm.eg.db", "presto", "RColorBrewer", "readr",
+              "SummarizedExperiment", "UCell")
+
+lapply(packages, library, character.only = TRUE)
+```
+
+## Loading data in
+
+To start, the aligned reads have to be loaded in. Since the dataset is so large and most of it is irrelevant to us, the reads can be subset before they are merged and turned into a workable Seurat object. There are two main ways to do this - Through subsetting a random selection of cells, or by picking a pre-defined "major trajectory" from the initial data. Both have to be done on a machine with a lot of memory, like the HPC cluster.
+
+This code is mainly based on the example downloading code given on the OMG website, [link here](https://shendure-web.gs.washington.edu/content/members/cxqiu/public/backup/jax/download/mtx/Example_Script).
+
+To subset all the cells labelled with the major trajectory "white blood cells", you can use the code below. This code reads all the metadata given, then filters the resulting data to only include the cells whos cell type groups we are interest in.
+
+```{r}
+#| eval: false
+
+pd_all <- readRDS("data/df_cell.rds") # Metadata file
+pd <- pd_all[pd_all$major_trajectory %in% "White_blood_cells",]
+```
+
+If you wanted to subset 100,000 cells randomly, you could use the code below instead.
+
+```{r}
+#| eval: false
+#| eval: false
+pd_all <- readRDS("data/df_cell.rds")
+pd <- pd_all[sample(1:nrow(pd_all), 100000), ]
+```
+
+Once you've defined which cells you want to read based on their metadata, the code below imports the counts for each cells and drops the ones that don't align with the subset metadata. Once this is done, each run is saved as a seperate .rds object.
+
+```{r}
+#| eval: false
+
+df_gene <- read.csv("data/gene_annotation.csv.gz")
+
+runs <- c(4, 13:16, 18:29, "17_sub1", "17_sub2")
+
+for (i in runs) {
+  run_id <- paste0("run_", i)
+  message("\nProcessing ", run_id, "...")
+
+  gene_count <- readMM(gzfile(paste0("data/gene_count.", run_id, ".mtx.gz")))
+  df_cell <- fread(paste0("data/cell_annotation.", run_id, ".csv.gz"))
+  
+  # Assign row and column names
+  rownames(gene_count) <- df_gene$gene_ID
+  colnames(gene_count) <- df_cell$cell_id
+  
+  common_cells <- intersect(pd$cell_id, colnames(gene_count))  
+  filtered <- gene_count[, common_cells, drop = FALSE]
+
+  saveRDS(filtered, paste0("data/subset_gene_count_", i, ".rds"))
+  
+  # Cleanup to free memory
+  rm(gene_count, df_cell, filtered, common_cells)
+  gc()
+}
+```
+
+Then, we read all of the resulting .rds files into R and combine them into one large object containing all of our cells, saved as genes.rds.
+
+```{r}
+#| eval: false
+
+run_ids <- c(4, 13:16, 18:29, "17_sub1", "17_sub2")
+mats <- list()
+
+for (run_id in run_ids) {
+  message("Reading run ", run_id)
+  fn <- paste0("data/subset_gene_count_", run_id, ".rds")
+  mats[[run_id]] <- readRDS(fn)
+}
+
+gene_count <- do.call(cbind, mats)
+rownames(pd) <- pd$cell_id
+pd <- pd[colnames(gene_count), ]
+
+saveRDS(gene_count, "data/genes.rds")
+saveRDS(pd, "data/pd.rds")
+```
+
+To make the data better to work with, I've converted the gene names from Ensembl IDs into their gene symbols. While it's possible to do this after the Seurat object is made, I found it to be way too much hassle and so doing it before any downstream analysis should (hopefully!) not be problematic.
+
+```{r}
+#| eval: false
+
+gene_count <- readRDS("data/genes.rds")
+pd <- readRDS("data/pd.rds")
+
+# clean Ensembl IDs (remove version suffix, which comes from having 
+# multiple variations of each ID that won't properly map to a symbol)
+ens_ids  <- rownames(gene_count)
+ens_core <- sub("\\..*$", "", ens_ids)
+
+# Fetch mapping (Ensembl -> MGI symbol)
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+map <- getBM(
+  attributes = c("ensembl_gene_id", "mgi_symbol"),
+  filters    = "ensembl_gene_id",
+  values     = unique(ens_core),
+  mart       = ensembl
+)
+
+sym <- map$mgi_symbol[match(ens_core, map$ensembl_gene_id)]
+# Fallback to Ensembl if symbol missing/blank
+sym[is.na(sym) | sym == ""] <- ens_core[is.na(sym) | sym == ""]
+
+uniq_sym <- unique(sym)
+j <- match(sym, uniq_sym)                
+i <- seq_along(sym)                   
+P <- sparseMatrix(i = i, j = j, x = 1L, dims = c(length(sym), length(uniq_sym)))
+
+gene_count_agg <- t(P) %*% gene_count
+rownames(gene_count_agg) <- uniq_sym
+```
+
+We then merge the gene_count and metadata files into a Seurat object, which allows us to work with the data for single cell analysis.
+
+```{r}
+#| eval: false
+
+reads_obj <- CreateSeuratObject(gene_count_agg,
+                                assay = "RNA",
+                                meta.data = pd)
+```
+
+```{r}
+#| eval: false
+#| echo: false
+
+# Removing unwanted data to keep background memory usage low
+rm(ensembl, gene_count, gene_count_agg, map, P, ens_core, ens_ids, 
+   i, j, sym, uniq_sym, df_gene, mats, pd, pd_all)
+gc()
+```
+
+## Quality control
+
+Quality control involves filtering out low quality cells. A lot of this was already done when they were mapped to sequences as a default by 10X Chromium, such as removal of cells with very low gene counts, but there is still some additional QC we can do.
+
+The code below finds the amount of genes per UMI and how many of those are mitochondrial genes
+
+```{r}
+#| eval: false
+
+reads_obj <- readRDS("clean_rds/unsubset_object.rds")
+
+# Genes per UMI
+reads_obj$log10GenesPerUMI <- log10(reads_obj$nFeature_RNA) / log10(reads_obj$nCount_RNA) # Finds genes per UMI
+
+# Ratio of mitochondrial transcripts to non-mitochondrial transcripts
+reads_obj$mitoRatio <- PercentageFeatureSet(object = reads_obj, pattern = "^mt-") # Finds mitochondrial genes
+reads_obj$mitoRatio <- reads_obj@meta.data$mitoRatio / 100 # Gives percentage score
+
+# Ratio of ribosomal transcripts to non-ribosomal transcripts
+reads_obj$riboRatio <- PercentageFeatureSet(reads_obj, pattern = "^Rp[sl]")
+reads_obj$riboRatio <- reads_obj@meta.data$riboRatio / 100
+
+tab <- table(reads_obj$RT_group)
+keep_groups <- names(tab)[tab >= 50]
+reads_obj <- subset(reads_obj, 
+                    RT_group %in% keep_groups)
+
+# Ratio of haemoglobin genes, which indicate ambient RNA expression
+hb_genes <- grep("^(Hba|Hbb)", rownames(reads_obj), value = TRUE)
+reads_obj[["percent.hb"]] <- PercentageFeatureSet(reads_obj, 
+                                                  features = hb_genes)
+
+# Finding doublets
+library(scDblFinder)
+sce <- as.SingleCellExperiment(reads_obj)
+sce <- scDblFinder(sce, samples = "mouse.id")
+```
+
+Another quality control measure is regressing out the effect of cell cycle genes. Before this can be done, the data needs to be normalised.
+
+```{r}
+#| eval: false
+
+library(scran)
+clusters <- quickCluster(sce)
+sce <- computeSumFactors(sce, clusters = clusters)
+sce <- logNormCounts(sce)
+reads_obj <- as.Seurat(sce)
+```
+
+We can also subset out the cells with high percentages of haemoglobin genes, which indicate ambient RNA contamination.
+
+Using this information, we can then subset the object to only the high quality cells.
+
+```{r}
+#| eval: false
+
+reads_obj_subset <- subset(reads_obj, 
+                           nCount_RNA >= 500 & 
+                             nFeature_RNA >= 250 & 
+                             log10GenesPerUMI > 0.80 & 
+                             riboRatio < 0.10 &
+                             mitoRatio < 0.25 &
+                             scDblFinder.class == "singlet" &
+                             percent.hb < 5
+                           ) # Subsets low quality cells 
+
+# How many cells after vs before filtering
+dim(reads_obj_subset)
+dim(reads_obj)
+
+reads_obj <- reads_obj_subset
+rm(reads_obj_subset)
+```
+
+Then, we can give each cell a score for either S phase or G2M phase of the cell cycle, allowing them to have a cell cycle phase assigned to them. Since we are working with development data, cell cycle will have an impact on downstream analysis as it will distinguish terminally differentiated neutrophils from precursors. However, we want to minimise it's effect on visualisation so we can try and pick out heterogeneity within our stem cell and neutrophil populations, not just between them.
+
+```{r}
+#| eval: false
+
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+
+reads_obj <- CellCycleScoring(reads_obj,
+                              s.features = s.genes,
+                              g2m.features = g2m.genes)
+
+# Calculating CC Difference instead of just cell cycle score prevents the 
+# overcorrection of stem cells 
+reads_obj$CC.Difference <- reads_obj$S.Score - reads_obj$G2M.Score
+rm(g2m.genes, s.genes)
+```
+
+With all the QC done, we can do necessary scaling and downstream work. FindVariableFeatures and ScaleData will need to be done again if we subset a large portion of our cells, or if we change reduction.
+
+```{r}
+#| eval: false
+
+reads_obj <- FindVariableFeatures(reads_obj)
+reads_obj <- ScaleData(reads_obj,
+                       vars.to.regress = c("CC.Difference", "mitoRatio", "riboRatio", "RT_group"),
+                       features = VariableFeatures(reads_obj))
+reads_obj <- RunPCA(reads_obj)
+
+DimPlot(reads_obj,
+        reduction = "pca")
+```
+
+Working with embryos means working with fragile tissues, which often causes issues with ambient RNA contamination. To try and work around this, we can use the function decontX. Other methods of ambient RNA contamination correction involve looking at empty droplets, but since we don't have that data this will have to do. A very basic form of ambient RNA contamination correction was already performed earlier, but below is a version that uses a specific package.
+
+```{r}
+#| eval: false
+
+library(celda)
+DefaultAssay(reads_obj) <- "RNA"
+sce <- as.SingleCellExperiment(reads_obj)
+clusters <- as.character(reads_obj$celltype_update)
+batches <- as.character(reads_obj$RT_group)
+
+sce <- decontX(sce,
+               z = clusters,
+               batch = batches)
+
+corrected <- decontXcounts(sce)
+
+reads_obj[["decontX"]] <- CreateAssayObject(counts = corrected)
+DefaultAssay(reads_obj) <- "decontX"
+
+contam <- colData(sce)$decontX_contamination
+all(names(contam) %in% colnames(reads_obj))
+reads_obj$decontX_contamination <- contam
+
+VlnPlot(reads_obj, features = "decontX_contamination", pt.size = 0)
+FeaturePlot(reads_obj, features = "decontX_contamination")
+```
+
+![](final-images/decont-violin.png){width="556"}
+
+![](final-images/decont-pca.png){width="556"}
+
+Cells with high levels of ambient RNA contamination should be removed from the data set. For this dataset, we will use a cutoff of 50%.
+
+```{r}
+reads_obj <- subset(reads_obj, 
+                    decontX_contamination < 0.5)
+```
+
+Then, we can give each cell a predicted cell type by comparing it to the ImmGen immune single cell database, done with the package SingleR. The ImGgen reference has two types of labels; Main labels and fine labels. We will add both to the database to compare.
+
+```{r}
+#| eval: false
+
+ref <- fetchReference("immgen", "2024-02-26")
+sce <- as.SingleCellExperiment(reads_obj)
+
+cell_identity <- SingleR(test = sce, 
+                         ref = ref,
+                         labels =ref$label.main)
+
+cell_identity2 <- SingleR(test = sce,
+                          ref = ref,
+                          labels =ref$label.fine)
+
+reads_obj$singleR_main_label <- cell_identity$pruned.labels
+reads_obj$singleR_fine_label <- cell_identity2$pruned.labels
+
+reads_obj@meta.data[["singleR_fine_label"]][is.na(reads_obj@meta.data[["singleR_fine_label"]])] <- "NA"
+reads_obj@meta.data[["singleR_main_label"]][is.na(reads_obj@meta.data[["singleR_main_label"]])] <- "NA"
+
+reads_obj$Embryonic_day <- gsub("\\..*", "", reads_obj$day) 
+# Adds a rounded embryonic day value
+```
+
+These labels do not necessarily line up. For the sake of casting a broad net, our data will be subset by expression of a neutrophil or stem cell label in either main or fine label. The original labels will be kept in the metadata for comparison.
+
+```{r}
+#| eval: false
+
+# Make lowercase for matching
+ml <- reads_obj$singleR_main_label
+fl <- reads_obj$singleR_fine_label
+
+is_neutro <- ml == "Neutrophils" | grepl("^Neutrophils", fl)
+is_stem <- ml == "Stem cells"  | grepl("^Stem cells", fl)
+
+reads_obj$main_label <- reads_obj$singleR_main_label
+reads_obj$main_label[is_stem] <- "Stem cells"
+reads_obj$main_label[is_neutro] <- "Neutrophils"
+
+saveRDS(reads_obj, "clean_rds/unsubset_object.rds")
+```
+
+```{r}
+#| eval: false
+#| echo: false
+
+rm(ref, fl, is_neutro, is_stem, ml, sce, cell_identity, cell_identity2)
+```
+
+## Neutrophil and stem cell subset
+
+Using the new labels, we can subset all cells labeled as neutrophils or stem cells to give us a more relevant dataset to work with.
+
+```{r}
+reads_obj <- readRDS("clean_rds/unsubset_object.rds")
+
+neustem_subset <- subset(reads_obj, 
+                         main_label %in% c("Neutrophils", "Stem cells"))
+```
+
+Since a large portion of the cells have been subset, we need to run FindVariableFeatures and ScaleData again. We also run PCA and UMAP dimensionality reduction for visualisation.
+
+```{r}
+set.seed(26)
+```
+
+```{r}
+#| eval: false
+
+neustem_subset <- FindVariableFeatures(neustem_subset)
+neustem_subset <- ScaleData(neustem_subset,
+                            vars.to.regress = c("CC.Difference", "mitoRatio", "riboRatio", "RT_group"),
+                            features = VariableFeatures(neustem_subset))
+
+DefaultAssay(neustem_subset) <- "RNA"
+
+neustem_subset <- neustem_subset %>%
+  RunPCA(reduction.name = "rna_pca") %>%
+  RunUMAP(reduction.name = "rna_umap",
+          reduction = "rna_pca", 
+          dims = 1:50)
+
+library(dittoSeq)
+dittoDimPlot(neustem_subset,
+             "main_label",
+             reduction.use = "rna_umap",
+             size = 0.3,
+             theme = theme_linedraw(),
+             do.raster = TRUE,
+             xlab = "UMAP 1",
+             ylab = "UMAP 2",
+             main = NULL, 
+             legend.show = FALSE,
+             opacity = 1)
+```
+
+```{r}
+saveRDS(neustem_subset, "clean_rds/neustem_subset_v2.rds")
+```
+
+```{r}
+#| eval: true
+#| echo: false
+
+neustem_subset <- readRDS("clean_rds/neustem_subset_v3.rds")
+potency <- neustem_subset$cytotrace_potency
+
+DimPlot(neustem_subset,
+        reduction = "umap",
+        group.by = "cytotrace_potency")
+
+```
+
+To ensure the figures are consistent, we can make a function that contains the same settings each time.
+
+```{r}
+dittodim <- function(obj, group.by, reduction) {
+  dittoDimPlot(object = obj, 
+               var = group.by,
+               reduction = reduction,
+               size = 0.3,
+               theme = theme_linedraw(),
+               do.raster = TRUE,
+               xlab = "UMAP 1",
+               ylab = "UMAP 2",
+               main = NULL, 
+               opacity = 1)  
+}
+```
+
+Looking at the data, you can see some little 'islands' that are likely to be leftover cells that just create noise in the data. Going forward, we will be getting rid of these to focus on the relevant cell populations.
+
+```{r}
+#| eval: false
+
+library(shiny)
+library(plotly)
+
+emb <- Embeddings(neustem_subset, "rna_umap")
+df <- data.frame(UMAP_1 = emb[,1], UMAP_2 = emb[,2], cell = rownames(emb))
+
+ui <- fluidPage(
+  plotlyOutput("p"),
+  verbatimTextOutput("nsel")
+)
+
+server <- function(input, output, session) {
+  output$p <- renderPlotly({
+    plot_ly(df, x = ~UMAP_1, y = ~UMAP_2,
+            type = "scattergl", mode = "markers",
+            key = ~cell, marker = list(size = 3))
+  })
+
+  output$nsel <- renderPrint({
+    s <- event_data("plotly_selected")
+    if (is.null(s)) return("Select points with lasso/box")
+    length(s$key)
+  })
+
+  observeEvent(event_data("plotly_selected"), {
+    s <- event_data("plotly_selected")
+    cells_sel <- s$key
+    # saving those cells
+    writeLines(cells_sel, "selected_cells.txt")
+  })
+}
+
+shinyApp(ui, server)
+
+cells_sel <- readLines("selected_cells.txt")
+neustem_subset <- subset(neustem_subset, cells = cells_sel)
+```
+
+```{r}
+dittodim(neustem_subset, 
+         reduction = "rna_umap",
+         group.by = "Phase")
+
+library(Seurat)
+FeaturePlot(neustem_subset,
+            reduction = "rna_umap",
+            features = "Ncam1")
+
+VlnPlot(neustem_subset,
+        features = "Ncam1",
+        group.by = "Embryonic_day",
+        pt.size = 0)
+```
+
+Now that we have the neutrophils and the stem cells isolated, we can find appropriate clusters. While there is no one best way to do this, using a clustree graph can be helpful for comparing resolutions.
+
+```{r}
+#| eval: false
+
+neustem_subset <- FindNeighbors(neustem_subset)
+
+res_grid <- c(0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6)
+
+for (r in res_grid) {
+  neustem_subset <- FindClusters(neustem_subset, 
+                                 resolution = r, 
+                                 algorithm = 4, 
+                                 verbose = FALSE,
+                                 graph.name = "RNA_nn", 
+                                 cluster.name = paste0("clust_", r))
+}
+
+# Plot clustree
+clustree(neustem_subset@meta.data, prefix = "clust_")
+```
+
+![](clustree.png)
+
+The clustree plot shows that best resolution would be around 0.8, as there is the smallest difference in cluster numbers between 0.8 and 1. We will then set the 0.8 resolution as the default clustering, and delete the rest.
+
+```{r}
+#| eval: false
+
+neustem_subset$seurat_clusters <- neustem_subset$clust_0.2
+```
+
+```{r}
+#| eval: false
+#| echo: false
+
+neustem_subset$clust_0.2 <- NULL
+neustem_subset$clust_0.4 <- NULL
+neustem_subset$clust_0.6 <- NULL
+neustem_subset$clust_0.8 <- NULL
+neustem_subset$clust_1 <- NULL
+neustem_subset$clust_1.2 <- NULL
+neustem_subset$clust_1.4 <- NULL
+neustem_subset$clust_1.6 <- NULL
+```
+
+```{r}
+DimPlot(neustem_subset, 
+         group.by = "seurat_clusters",
+         reduction = "rna_umap")
+
+library(dittoSeq)
+dittoBarPlot(neustem_subset,
+             var = "seurat_clusters",
+             group.by = "Embryonic_day")
+```
+
+### Pseudobulking
+
+Pseudobulking is the most statistically sound way to do differential expression analysis. Here, we are pseudobulking based off clusters. The two clusters chosen are 5, which represent the most terminally differentiated neutrophils (refereed to here as terminal neus) and 2, which contains cells all identified as neutrophils but are less differentiated and are actively going through the cell cycle.
+
+First, we will compare all neutrophils from E14 and E15 to E18 and P0. This allows us to have a bigger picture overview of the changes that occur.
+
+```{r}
+#| eval: false
+
+neus <- subset(neustem_subset, seurat_clusters %in% c(5, 2))
+
+neus_embryos <- table(neus$embryo_id)
+neus_embryos <- as.data.frame(neus_embryos)
+colnames(neus_embryos) <- c("embryo-id", "n-cells")
+neus_embryos <- neus_embryos$`embryo-id`[
+  neus_embryos$`n-cells` >= 50
+] # Making sure all embryos have more than 50 cells for more robust analysis
+neus <- subset(neus, embryo_id %in% neus_embryos)
+
+pseudo_neus <- AggregateExpression(neus,
+                                   assays = "RNA",
+                                   slot = "counts",
+                                   return.seurat = FALSE,
+                                   group.by = "embryo_id")
+
+pseudo_neus <- pseudo_neus$RNA
+pseudo_neus <- pseudo_neus[, -c(1, 2, 3, 12, 13, 14, 15, 16, 17, 18, 19)] # Removing embryos outside of the days requested
+
+# Creates the design matrix needed for DESeq2
+meta <- neus@meta.data %>%
+  dplyr::select(embryo_id, Embryonic_day) %>%
+  dplyr::distinct() %>%
+  dplyr::arrange(embryo_id)
+
+meta <- meta[meta$embryo_id %in% c("embryo_53", "embryo_54", "embryo_55", "embryo_56", 
+                                   "embryo_57", "embryo_58", "embryo_59", "embryo_60", 
+                                   "embryo_69", "embryo_70", "embryo_71", "embryo_72",
+                                   "embryo_73", "embryo_74"), ]
+meta <- mutate(meta, 
+               day_range = c("e14-15", "e14-15", "e14-15", "e14-15", "e14-15", "e14-15",
+                             "e14-15", "e14-15", "e18-p0", "e18-p0", "e18-p0", "e18-p0",
+                             "e18-p0", "e18-p0"))
+
+rownames(meta) <- meta$embryo_id
+meta$embryo_id <- NULL
+rownames(meta) <- gsub("_", "-", rownames(meta)) # Lines up everything 
+```
+
+```{r}
+library(DESeq2)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = pseudo_neus,
+  colData = meta,
+  design = ~ day_range
+)
+
+dds <- DESeq(dds)
+results(dds)
+mid_late_results <- as.data.frame(results(dds, contrast = c("day_range", "e14-15", "e18-p0")))
+mid_late_results <- subset(mid_late_results,padj < 0.05)
+write.csv(mid_late_results, "pseudobulk_res/e14-15_vs_e18-p0.csv")
+```
+
+```{r}
+DimPlot(neu_subset,
+        reduction = "umap",
+        group.by = "seurat_clusters")
+
+DimPlot(neu_subset,
+        reduction = "umap",
+        cells.highlight = WhichCells(neu_subset,
+                                     expression = Embryonic_day == "E14"),
+        sizes.highlight = 0.5)
+
+DimPlot(neu_subset,
+        reduction = "umap",
+        cells.highlight = WhichCells(neu_subset,
+                                     expression = Embryonic_day == "E18"),
+        sizes.highlight = 0.5,
+        d)
+```
+
+We can subset out the E14-E15 upregulated results and run them through clusterProfiler to have a better understanding of the main differences.
+
+# Cell Chat
+
+```{r}
+celltype_merge_map <- c(
+  # ---------------- IMMUNE ----------------
+  "Border-associated macrophages" = "Myeloid cells",
+  "Border-associated macrophages (Cd74+)" = "Myeloid cells",
+  "Border-associated macrophages (Ms4a8a+)" = "Myeloid cells",
+  "Microglia" = "Myeloid cells",
+  "Kupffer cells" = "Myeloid cells",
+  "Monocytes" = "Myeloid cells",
+  "Conventional dendritic cells" = "Myeloid cells",
+  "Monocytic myeloid-derived suppressor cells" = "Myeloid cells",
+  "Adipose tissue macrophages" = "Myeloid cells",
+  "Myeloid cells" = "Myeloid cells",
+  "Granulocytes" = "Myeloid cells",
+  "Plasmacytoid dendritic cells" = "Myeloid cells",
+  "PMN myeloid-derived suppressor cells" = "Myeloid cells",
+  "Mast cells (P2rx7+)" = "Myeloid cells",
+
+  "Neutrophils" = "Neutrophils",
+
+  "T cells" = "Lymphocytes",
+  "Regulatory T cells" = "Lymphocytes",
+  "Activated T cells" = "Lymphocytes",
+  "B cells" = "Lymphocytes",
+  "B cell progenitors" = "Lymphocytes",
+  "Natural killer cells" = "Lymphocytes",
+  "Lymphocytes" = "Lymphocytes",
+
+  # ---------------- HEMATOPOIESIS ----------------
+  "Hematopoietic stem cells (Cd34+)" = "Hematopoietic progenitors",
+  "Hematopoietic stem cells (Mpo+)" = "Hematopoietic progenitors",
+  "Hematopoietic progenitors" = "Hematopoietic progenitors",
+  "Megakaryocytes" = "Hematopoietic progenitors",
+
+  "Definitive early erythroblasts (CD36-)" = "Erythroid lineage",
+  "Definitive erythroblasts (CD36+)" = "Erythroid lineage",
+  "Erythroid lineage" = "Erythroid lineage",
+
+  # ---------------- ENDOTHELIAL ----------------
+  "Arterial endothelial cells" = "Endothelial cells",
+  "Brain capillary endothelial cells" = "Endothelial cells",
+  "Endothelium" = "Endothelial cells",
+  "Glomerular endothelial cells" = "Endothelial cells",
+  "Liver sinusoidal endothelial cells" = "Endothelial cells",
+  "Lymphatic vessel endothelial cells" = "Endothelial cells",
+  "Venous and capillary endothelial cells" = "Endothelial cells",
+  "Endothelial cells" = "Endothelial cells",
+  "Microvascular endothelial cells" = "Endothelial cells",
+
+  "Brain pericytes" = "Pericytes",
+  "Pericytes" = "Pericytes",
+
+  # ---------------- MESENCHYMAL ----------------
+  "Fibroblasts" = "Mesenchymal stromal cells",
+  "Myofibroblasts" = "Mesenchymal stromal cells",
+  "Facial mesenchyme" = "Mesenchymal stromal cells",
+  "Limb mesenchyme progenitors" = "Mesenchymal stromal cells",
+  "Metanephric mesenchyme" = "Mesenchymal stromal cells",
+  "Lateral plate and intermediate mesoderm" = "Mesenchymal stromal cells",
+  "Dermatome" = "Mesenchymal stromal cells",
+  "Sclerotome" = "Mesenchymal stromal cells",
+  "Adipocyte progenitor cells" = "Mesenchymal stromal cells",
+  "Mesenchymal stromal cells" = "Mesenchymal stromal cells",
+
+  # adipocytes
+  "Adipocyte cells (Cyp2e1+)" = "Mesenchymal stromal cells",
+  "Brown adipocyte cells" = "Mesenchymal stromal cells",
+
+  # ---------------- BONE / CARTILAGE ----------------
+  "Chondrocytes (Atp1a2+)" = "Chondrocytes",
+  "Chondrocytes (Otor+)" = "Chondrocytes",
+  "Early chondrocytes" = "Chondrocytes",
+  "Chondrocytes" = "Chondrocytes",
+
+  "Pre-osteoblasts (Sp7+)" = "Bone lineage",
+  "Osteoclasts" = "Bone lineage",
+  "Bone lineage" = "Bone lineage",
+
+  # ---------------- MUSCLE ----------------
+  "Muscle progenitor cells" = "Muscle lineage",
+  "Myoblasts" = "Muscle lineage",
+  "Myotubes" = "Muscle lineage",
+  "Muscle lineage" = "Muscle lineage",
+
+  # cardiac
+  "Atrial cardiomyocytes" = "Muscle lineage",
+  "Ventricular cardiomyocytes" = "Muscle lineage",
+  "Endocardial cells" = "Muscle lineage",
+
+  # ---------------- NEURONS ----------------
+  "Neurons" = "Neurons",
+  "Cajal-Retzius cells" = "Neurons",
+  "Cerebellar Purkinje cells" = "Neurons",
+  "Cerebellum-related cells" = "Neurons",
+  "Cortical Interneurons (Prox1+)" = "Neurons",
+  "Deep-layer neurons" = "Neurons",
+  "GABAergic cortical interneurons" = "Neurons",
+  "GABAergic neurons" = "Neurons",
+  "Glutamatergic neurons" = "Neurons",
+  "Retinal ganglion cells" = "Neurons",
+  "Subplate neurons" = "Neurons",
+  "Upper-layer neurons" = "Neurons",
+  "Spinal cord motor neurons" = "Neurons",
+
+  # sensory neurons
+  "Dorsal root ganglion neurons" = "Neurons",
+  "Cranial motor neurons" = "Neurons",
+  "Neural crest (PNS neurons)" = "Neurons",
+  "Olfactory sensory neurons" = "Neurons",
+  "Otic sensory neurons" = "Neurons",
+  "Parasympathetic neurons" = "Neurons",
+  "Sympathetic neurons" = "Neurons",
+
+  # neuronal progenitors
+  "Intermediate neuronal progenitors" = "Neurons",
+  "Naive retinal progenitor cells" = "Neurons",
+  "Neural progenitor cells (Neurod1+)" = "Neurons",
+  "Neural progenitor cells (Ror1+)" = "Neurons",
+  "Retinal progenitor cells" = "Neurons",
+  "Spinal cord dorsal progenitors" = "Neurons",
+  "Spinal cord ventral progenitors" = "Neurons",
+  "Thalamic neuronal precursors" = "Neurons",
+  "Pituitary/Pineal gland progenitors" = "Neurons",
+
+  # retinal neurons
+  "Amacrine cells" = "Neurons",
+  "Cholinergic amacrine cells" = "Neurons",
+  "Horizontal cells" = "Neurons",
+  "PV-containing retinal ganglion cells" = "Neurons",
+
+  # ---------------- GLIA ----------------
+  "Astrocytes" = "Glial cells",
+  "Myelinating Schwann cells" = "Glial cells",
+  "Myelinating Schwann cells (Tgfb2+)" = "Glial cells",
+  "Oligodendrocyte progenitor cells" = "Glial cells",
+  "Satellite glial cells" = "Glial cells",
+  "Neural crest (PNS glia)" = "Glial cells",
+  "Glial cells" = "Glial cells",
+  "Committed oligodendrocyte precursors" = "Glial cells",
+  "Olfactory ensheathing cells" = "Glial cells",
+
+  # ---------------- BRAIN REGIONS ----------------
+  "Anterior floor plate" = "Brain regional cells",
+  "Eye field" = "Brain regional cells",
+  "Floorplate and p3 domain" = "Brain regional cells",
+  "Posterior roof plate" = "Brain regional cells",
+  "Choroid plexus" = "Brain regional cells",
+  "Multiciliated ependymal cells" = "Brain regional cells",
+  "Brain regional cells" = "Brain regional cells",
+
+  # ---------------- CNS AREAS ----------------
+  "Diencephalon" = "Neurons",
+  "Dorsal telencephalon" = "Neurons",
+  "Hindbrain" = "Neurons",
+  "Hypothalamus" = "Neurons",
+  "Midbrain" = "Neurons",
+  "Olfactory bulb cells" = "Neurons",
+  "Spinal cord/r7/r8" = "Neurons",
+  "Suprachiasmatic nucleus" = "Neurons",
+  "Telencephalon" = "Neurons",
+
+  # ---------------- EPITHELIAL ----------------
+  "Basal keratinocytes" = "Epithelial cells",
+  "Branchial arch epithelium" = "Epithelial cells",
+  "Dental epithelial cells" = "Epithelial cells",
+  "Foregut epithelial cells" = "Epithelial cells",
+  "Granular keratinocytes" = "Epithelial cells",
+  "Midgut/Hindgut epithelial cells" = "Epithelial cells",
+  "Olfactory epithelial cells" = "Epithelial cells",
+  "Otic epithelial cells" = "Epithelial cells",
+  "Placodal area" = "Epithelial cells",
+  "Pre-epidermal keratinocytes" = "Epithelial cells",
+
+  # organ epithelial
+  "Biliary epithelial cells" = "Epithelial cells",
+  "Bladder urothelial cells" = "Epithelial cells",
+  "Thymic epithelial cells" = "Epithelial cells",
+  "Lens epithelial cells" = "Epithelial cells",
+  "Retinal pigment cells" = "Epithelial cells",
+  "Epithelial cells" = "Epithelial cells",
+
+  # lung
+  "Airway club cells" = "Epithelial cells",
+  "Airway goblet cells" = "Epithelial cells",
+  "Alveolar Type 1 cells" = "Epithelial cells",
+  "Alveolar Type 2 cells" = "Epithelial cells",
+  "Lung cells (Eln+)" = "Epithelial cells",
+
+  # intestine
+  "Intestinal enteroendocrine cells" = "Epithelial cells",
+  "Intestinal goblet cells" = "Epithelial cells",
+
+  # kidney
+  "Nephron progenitors" = "Epithelial cells",
+  "Proximal tubule cells" = "Epithelial cells",
+  "Distal convoluted tubule" = "Epithelial cells",
+  "Connecting tubule" = "Epithelial cells",
+  "Collecting duct principal cells" = "Epithelial cells",
+  "Collecting duct intercalated cells" = "Epithelial cells",
+  "Ascending loop of Henle" = "Epithelial cells",
+  "Podocytes" = "Epithelial cells",
+  "Ureteric bud" = "Epithelial cells",
+
+  # endocrine
+  "Pancreatic islets" = "Epithelial cells",
+  "Pituitary gland cells" = "Epithelial cells",
+  "Pineal gland" = "Epithelial cells",
+  "Adrenocortical cells" = "Epithelial cells",
+  "Parathyroid epithelial cells" = "Epithelial cells",
+  "Thyroid gland cells" = "Epithelial cells",
+  "Pancreatic acinar cells" = "Epithelial cells",
+
+  # germline
+  "Primordial germ cells" = "Mesenchymal stromal cells",
+  
+  # neuronal progenitors
+  "Amacrine/Horizontal precursor cells" = "Neurons",
+  "Bipolar precursor cells" = "Neurons",
+  "Cone precursor cells" = "Neurons",
+  "Photoreceptor precursor cells" = "Neurons",
+  "Rod precursor cells" = "Neurons",
+
+  # neurons
+  "Corticofugal neurons" = "Neurons",
+
+  # neural / brain structural
+  "Ependymal cells" = "Glial cells",
+  "Cochlear hair cells" = "Neurons",
+
+  # structural tissues
+  "Bone lineage" = "Bone lineage",
+  "Chondrocytes" = "Chondrocytes",
+
+  # epithelial
+  "Conjunctival goblet cells" = "Epithelial cells",
+  "Tooth junctional epithelium" = "Epithelial cells",
+  "Epithelial cells" = "Epithelial cells"
+)
+
+```
+
+```{r}
+e14_subset <- readRDS("e14_neus_allcells.rds")
+
+old_labels <- e14_subset$celltype_label
+new_labels <- unname(celltype_merge_map[old_labels])
+new_labels[is.na(new_labels)] <- old_labels[is.na(new_labels)]
+e14_subset$celltype_merged <- new_labels
+
+set.seed(123)
+group_col <- "celltype_merged"
+max_cells <- 2000
+
+meta <- e14_subset@meta.data
+cell_list <- split(rownames(meta), meta[[group_col]])
+
+cells_keep <- unlist(lapply(cell_list, function(x) {
+  if (length(x) > max_cells) sample(x, max_cells) else x
+}), use.names = FALSE)
+
+neustem_cellchat <- subset(e14_subset, cells = cells_keep)
+table(e14_subset@meta.data[[group_col]])
+
+e14_subset <- neustem_cellchat
+e14_labels <- unique(e14_subset$celltype_merged)
+```
+
+```{r}
+#p0
+p0_subset <- readRDS("p0_neus_allcells.rds")
+old_labels <- p0_subset$celltype_label
+new_labels <- unname(celltype_merge_map[old_labels])
+new_labels[is.na(new_labels)] <- old_labels[is.na(new_labels)]
+p0_subset$celltype_merged <- new_labels
+
+set.seed(123)
+group_col <- "celltype_merged"
+max_cells <- 2000
+
+meta <- p0_subset@meta.data
+cell_list <- split(rownames(meta), meta[[group_col]])
+
+cells_keep <- unlist(lapply(cell_list, function(x) {
+  if (length(x) > max_cells) sample(x, max_cells) else x
+}), use.names = FALSE)
+
+neustem_cellchat <- subset(p0_subset, cells = cells_keep)
+table(p0_subset@meta.data[[group_col]])
+
+p0_subset <- neustem_cellchat
+p0_labels <- unique(p0_subset$celltype_merged)
+```
+
+```{r}
+common_terms <- intersect(e14_subset$celltype_merged, p0_subset$celltype_merged)
+e14_cc <- subset(e14_subset, subset = celltype_merged %in% common_terms)
+p0_cc <- subset(p0_subset, subset = celltype_merged %in% common_terms)
+
+e14_cc$celltype_label <- droplevels(factor(e14_cc$celltype_merged))
+p0_cc$celltype_label <- droplevels(factor(p0_cc$celltype_merged))
+
+# check group sizes
+table(e14_cc$celltype_merged)
+table(p0_cc$celltype_merged)
+```
+
+```{r}
+trace(createCellChat, edit = TRUE)
+
+# ---- make CellChat objects ----
+cellchat.e14 <- createCellChat(
+  object = e14_cc,
+  group.by = "celltype_merged",
+  assay = "RNA"
+)
+
+cellchat.p0 <- createCellChat(
+  object = p0_cc,
+  group.by = "celltype_merged",
+  assay = "RNA"
+)
+
+# mouse database
+cellchat.e14@DB <- CellChatDB.mouse
+cellchat.p0@DB <- CellChatDB.mouse
+
+# ---- standard CellChat pipeline ----
+cellchat.e14 <- subsetData(cellchat.e14)
+cellchat.e14 <- identifyOverExpressedGenes(cellchat.e14)
+cellchat.e14 <- identifyOverExpressedInteractions(cellchat.e14)
+cellchat.e14 <- projectData(cellchat.e14, PPI.mouse)
+cellchat.e14 <- computeCommunProb(cellchat.e14)
+cellchat.e14 <- filterCommunication(cellchat.e14, min.cells = 10)
+cellchat.e14 <- computeCommunProbPathway(cellchat.e14)
+cellchat.e14 <- aggregateNet(cellchat.e14)
+
+cellchat.p0 <- subsetData(cellchat.p0)
+cellchat.p0 <- identifyOverExpressedGenes(cellchat.p0)
+cellchat.p0 <- identifyOverExpressedInteractions(cellchat.p0)
+cellchat.p0 <- projectData(cellchat.p0, PPI.mouse)
+cellchat.p0 <- computeCommunProb(cellchat.p0)
+cellchat.p0 <- filterCommunication(cellchat.p0, min.cells = 10)
+cellchat.p0 <- computeCommunProbPathway(cellchat.p0)
+cellchat.p0 <- aggregateNet(cellchat.p0)
+
+saveRDS(cellchat.e14, "celchat_e14_v2.rds")
+saveRDS(cellchat.p0, "cellchat_p0_v2.rds")
+```
+
+```{r}
+netVisual_circle(
+  cellchat.e14@net$count,
+  weight.scale = TRUE,
+  label.edge = FALSE,
+  remove.isolate = FALSE,
+  title.name = "Interaction counts",
+  sources.use = "Neutrophils",
+  edge.curved = FALSE
+)
+
+netVisual_circle(
+  cellchat.e14@net$weight,
+  weight.scale = TRUE,
+  label.edge = FALSE,
+  remove.isolate = FALSE,
+  title.name = "Interaction weights/strength",
+  sources.use = "Neutrophils",
+  edge.curved = FALSE
+)
+```
+
+```{r}
+netVisual_circle(
+  cellchat.p0@net$count,
+  weight.scale = TRUE,
+  label.edge = FALSE,
+  remove.isolate = FALSE,
+  title.name = "Interaction counts",
+  sources.use = "Neutrophils",
+  edge.curved = FALSE
+)
+
+netVisual_circle(
+  cellchat.p0@net$weight,
+  weight.scale = TRUE,
+  label.edge = FALSE,
+  remove.isolate = FALSE,
+  title.name = "Interaction weights/strength",
+  sources.use = "Neutrophils",
+  edge.curved = FALSE
+)
+```
+
+```{r}
+cellchat.e14 <- updateCellChat(cellchat.e14)
+cellchat.p0  <- updateCellChat(cellchat.p0)
+
+object.list <- list(E14 = cellchat.e14, P0 = cellchat.p0)
+
+cellchat_merged <- mergeCellChat(
+  object.list,
+  add.names = names(object.list),
+  cell.prefix = TRUE
+)
+```
+
+```{r}
+netVisual_circle(cellchat.e14@net$count, weight.scale = TRUE, sources.use = "Neutrophils")
+netVisual_circle(cellchat.p0@net$count, weight.scale = TRUE, sources.use = "Neutrophils")
+```
+
+```{r}
+gg_count <- netVisual_barplot(
+  cellchat_merged,
+  comparison = c(2, 1),
+  measure = "count",
+  sources.use = "Neutrophils"
+)
+
+gg_weight <- netVisual_barplot(
+  cellchat_merged,
+  comparison = c(1, 2),
+  measure = "weight",
+  sources.use = "Neutrophils"
+)
+```
+
+```{r}
+weight.max <- getMaxWeight(object.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count, 
+                   weight.scale = T, 
+                   label.edge = F, 
+                   sources.use = "Neutrophils",
+                   edge.weight.max = 60, 
+                   edge.width.max = 60, 
+                   edge.curved = FALSE,
+                   title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+```
+
+```{r}
+rankNet(cellchat_merged, 
+               mode = "comparison", 
+               measure = "weight", 
+               sources.use = NULL, 
+               targets.use = "Neutrophils", 
+               stacked = T, 
+               do.stat = TRUE)
+
+rankNet(cellchat_merged, 
+               mode = "comparison", 
+               measure = "weight", 
+               sources.use = "Neutrophils", 
+               targets.use = NULL, 
+               stacked = T, 
+               do.stat = TRUE)
+
+rankNet(cellchat_merged, mode = "comparison", measure = "weight", sources.use = NULL, targets.use = NULL, stacked = F, do.stat = TRUE)
+
+netVisual_bubble(cellchat, 
+                 sources.use = "Neutrophils", 
+                 targets.use = NULL,  
+                 comparison = c(1, 2))
+```
+
+```{r}
+gg1 <- netVisual_bubble(cellchat_merged, 
+                        sources.use = "Neutrophils",
+                        targets.use = NULL,
+                        comparison = c(1, 2),
+                        max.dataset = 2,
+                        title.name = "Decreased signaling in E14",
+                        angle.x = 45,
+                        remove.isolate = T)
+
+#> Comparing communications on a merged object
+netVisual_bubble(cellchat_merged,
+                        sources.use = "Neutrophils", 
+                        targets.use = NULL,
+                        comparison = c(1, 2),
+                        max.dataset = 1,
+                        title.name = "Decreased signaling in P0",
+                        remove.isolate = T)
+
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+```{r}
+gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2))
+gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
+gg1 + gg2
+```
+
+```{r}
+library(CellChat)
+cellchat <- readRDS("e14_cellchat.rds")
+```
+
+```{r}
+groups.use <- c(
+  "Neutrophils",
+  "Neural progenitors",
+  "Myeloid cells",
+  "Muscle lineage",
+  "Mesenchymal stromal cells",
+  "Glial cells",
+  "CNS neurons",
+  "Chondrocytes",
+  "Brain regional cells",
+  "Bone lineage",
+  "Sensory/PNS neurons",
+  "Pericytes"
+)
+
+groupSize <- as.numeric(table(cellchat.p0@idents))
+names(groupSize) <- names(table(cellchat.p0@idents))
+
+groupSize_sub <- groupSize[groups.use]
+
+netVisual_circle(
+  cellchat@net$weight,
+  weight.scale = TRUE,
+  label.edge = FALSE,
+  remove.isolate = TRUE,
+  title.name = "Interaction weights/strength",
+  sources.use = "Neutrophils",
+  edge.curved = FALSE
+)
+
+mat <- cellchat@net$weight
+mat[is.na(mat)] <- 0
+
+src <- which(rownames(mat) == "Neutrophils")
+mat2 <- mat
+mat2[-src, ] <- 0
+
+netVisual_circle(
+  mat2,
+  weight.scale = TRUE,
+  label.edge = FALSE,
+  remove.isolate = FALSE,
+  title.name = "Neutrophil outgoing interaction strength",
+  edge.curved = FALSE
+)
+```
+
+```{r}
+mat <- cellchat@net$weight
+mat[is.na(mat)] <- 0
+
+src <- which(rownames(mat) == "Neutrophils")
+mat2 <- mat
+mat2[-src, ] <- 0
+
+netVisual_circle(
+  mat2,
+  weight.scale = TRUE,
+  label.edge = FALSE,
+  remove.isolate = FALSE,
+  title.name = "Neutrophil outgoing interaction strength",
+  edge.curved = FALSE
+)
+```
+
+```{r}
+groupSize <- as.numeric(table(cellchat.p0@idents))
+
+netVisual_circle(cellchat.p0@net$weight, 
+                 vertex.weight = 60,
+                 vertex.size.max = 15,
+                 weight.scale = T,
+                 top = 0.7,
+                 label.edge= F, 
+                 remove.isolate = T,
+                 title.name = "Interaction weights/strength",
+                 targets.use = "Neutrophils",
+                 edge.curved = FALSE,
+                 vertex.label.cex = 1.5,
+                 margin = 0.8,
+                 edge.width.max = 20)
+
+```
+
+```{r}
+netVisual_bubble(cellchat.p0, sources.use = "Neutrophils", remove.isolate = FALSE)
+
+netVisual_chord_gene(cellchat, 
+                     sources.use = "Neutrophils", 
+                     targets.use = c("Glial cells", "CNS neurons", "Sensory/PNS neurons"),
+                     lab.cex = 0.5,
+                     legend.pos.y = 30)
+
+netVisual_bubble(cellchat, sources.use = "Neutrophils", 
+                 targets.use = c("Glial cells", "CNS neurons", "Sensory/PNS neurons", 
+                                 "Neural progenitors", "Brain regional cells"),
+                 remove.isolate = FALSE)
+
+netVisual_bubble(cellchat, sources.use = "Neutrophils", remove.isolate = FALSE)
+```
+
+```{r}
+pathways.show <- "NCAM"
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP") # the slot 'netP' means the inferred 
+
+pdf("bub22_cellchat.pdf", width = 5, height = 5, useDingbats = FALSE)
+netAnalysis_signalingRole_network(cellchat, 
+                                  signaling = pathways.show, 
+                                  width = 8, 
+                                  height = 2.5, 
+                                  font.size = 10)
+dev.off()
+```
+
+```{r}
+library(CellChat)
+cellchat <- readRDS("e18_cellchat.rds")
+```
+
+```{r}
+groupSize <- as.numeric(table(cellchat.p0@idents))
+
+netVisual_circle(cellchat.p0@net$weight, 
+                 vertex.weight = 60,
+                 vertex.size.max = 15,
+                 weight.scale = T,
+                 top = 0.7,
+                 label.edge= F, 
+                 remove.isolate = T,
+                 title.name = "Interaction weights/strength",
+                 targets.use = "Neutrophils",
+                 edge.curved = FALSE,
+                 vertex.label.cex = 1.5,
+                 margin = 0.8,
+                 edge.width.max = 20)
+
+netVisual_circle(cellchat.p0@net$weight, 
+                 vertex.weight = 60,
+                 vertex.size.max = 15,
+                 weight.scale = T,
+                 top = 0.7,
+                 label.edge= F, 
+                 remove.isolate = TRUE,
+                 title.name = "Interaction weights/strength",
+                 sources.use = "Neutrophils",
+                 edge.curved = FALSE,
+                 vertex.label.cex = 1.5,
+                 margin = 0.8,
+                 edge.width.max = 20)
+
+```
+
+```{r}
+netVisual_bubble(cellchat, sources.use = "Neutrophils", remove.isolate = FALSE)
+
+netVisual_chord_gene(cellchat, 
+                     sources.use = "Neutrophils", 
+                     targets.use = c("Glial cells", "CNS neurons", "Sensory/PNS neurons"),
+                     lab.cex = 0.5,
+                     legend.pos.y = 30)
+
+netVisual_bubble(cellchat, sources.use = "Neutrophils", 
+                 targets.use = c("Glial cells", "CNS neurons", "Sensory/PNS neurons", 
+                                 "Neural progenitors", "Brain regional cells"),
+                 remove.isolate = FALSE)
+
+netVisual_bubble(cellchat, sources.use = "Neutrophils", remove.isolate = FALSE)
+
+gg1 <- netVisual_heatmap(cellchat, comparison = c(1, 2))
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+#> Do heatmap based on a merged object
+gg1 + gg2
+```
+
+```{r}
+pathways.show <- "NCAM"
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP") # the slot 'netP' means the inferred 
+
+pdf("bub22_cellchat.pdf", width = 5, height = 5, useDingbats = FALSE)
+netAnalysis_signalingRole_network(cellchat, 
+                                  signaling = pathways.show, 
+                                  width = 8, 
+                                  height = 2.5, 
+                                  font.size = 10)
+dev.off()
+```
+
+# Neutrophil subset
+
+```{r}
+neu_subset <- readRDS("clean_rds/neutrophils_only.rds")
+table(neu_subset$Embryonic_day)
+
+neu_subset <- subset(neustem_subset,
+                     main_label == "Neutrophils")
+library(tidyverse)
+neu_subset <- neu_subset %>% 
+  ScaleData() %>%
+  FindVariableFeatures() %>%
+  RunPCA() %>%
+  FindNeighbors()
+
+neu_subset <- RunUMAP(neu_subset,
+                      dims = 1:30)
+
+neu_subset <- RunTSNE(neu_subset,
+                      perplexity = 20)
+
+DimPlot(neu_subset,
+        reduction = "umap",
+        group.by = "seurat_clusters")
+
+neu_subset <- FindClusters(neu_subset, 
+                           resolution = 0.4, 
+                           algorithm = 4, 
+                           verbose = FALSE)
+
+DimPlot(neu_subset,
+        reduction = "umap",
+        group.by = "seurat_clusters")
+
+FeaturePlot(neu_subset,
+            reduction = "umap",
+            features = "Ncam1")
+
+VlnPlot(neu_subset,
+        features = "Ncam1",
+             group.by = "Embryonic_day", 
+             pt.size = 0)
+
+library(dittoSeq)
+dittoBarPlot(neu_subset,
+             cells.use = WhichCells(neu_subset,
+                                    expression = Embryonic_day %in% c("E11", "E12", "E13", "E14", "E15", "E16", "E17", "E18", "P0")),
+             var = "seurat_clusters",
+             group.by = "Embryonic_day")
+```
+
+```{r}
+library(Seurat)
+library(pheatmap)
+library(dplyr)
+
+neu_subset <- FindClusters(neu_subset, 
+                           resolution = 0.4, 
+                           algorithm = 4, 
+                           verbose = FALSE)
+
+neu_degs <- FindAllMarkers(neu_subset,
+                           group.by = "seurat_clusters",
+                           verbose = TRUE)
+
+neu_degs <- subset(neu_degs,
+                   p_val_adj < 0.05)
+
+neu_degs <- mutate(neu_degs,
+                   pct_diff = pct.1 - pct.2)
+
+neu_degs <- neu_degs[order(neu_degs$pct_diff), ]
+
+table(neu_subset$Embryonic_day)
+
+neu_degs$pct_diff <- abs(neu_degs$pct_diff)
+
+neu_degs_top20 <- neu_degs %>%
+  group_by(cluster) %>%
+  slice_max(order_by = avg_log2FC, n = 100) %>%
+  ungroup()
+
+genes <- unique(neu_degs_top20$gene)
+
+# Keep only genes actually present in the object
+genes <- genes[genes %in% rownames(neu_subset)]
+
+# Average expression per cluster
+avg_expr <- AverageExpression(
+  neu_subset,
+  assays = "RNA",
+  group.by = "seurat_clusters",
+  layer = "data"
+)$RNA
+
+# Subset to genes of interest
+mat <- avg_expr[genes, , drop = FALSE]
+
+# Optional: z-score by gene for clearer patterns across clusters
+mat_scaled <- t(scale(t(mat)))
+
+# Replace NA values that can appear if a gene has zero variance
+mat_scaled[is.na(mat_scaled)] <- 0
+
+cluster_order <- c("g3","g7","g2","g6","g1","g4","g5")
+
+mat_scaled <- mat_scaled[, cluster_order]
+
+# Plot heatmap
+pheatmap(
+  mat_scaled,
+  scale = "none",
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  fontsize_row = 8,
+  fontsize_col = 10,
+  border_color = NA
+)
+
+cluster_7 <- subset(neu_subset,
+                    seurat_clusters == "7")
+
+rats <- rats[order(rats$avg_log2FC, decreasing = TRUE), ]
+
+DimPlot(cluster_7,
+        group.by = "scDblFinder.score")
+
+FeaturePlot(cluster_7,
+            features = "Sema7a",
+            reduction = "umap")
+
+FeaturePlot(neu_subset,
+            features = "scDblFinder.score",
+            reduction = "umap")
+```
+
+```{r}
+DimPlot(neu_subset,
+        reduction = "umap",
+        cells.highlight = WhichCells(neu_subset,
+                                     expression = Embryonic_day == "E15"),
+        sizes.highlight =  0.2)
+```
+
+```{r}
+all_neus <- merge(neu_subset, adult_neu_subset)
+all_neus$Embryonic_day[is.na(all_neus$Embryonic_day)] <- "Adult"
+
+all_neus$Embryonic_day <- factor(
+  all_neus$Embryonic_day,
+  levels = c("E10","E11","E12","E13","E14","E15","E16","E17","E18","P0","Adult")
+)
+
+VlnPlot(all_neus,
+        features = "Ncam1",
+        group.by = "Embryonic_day",
+        pt.size = 0,
+        add.noise = FALSE,
+        log = FALSE)
+
+library(tidyverse)
+```
+
+# Trajectory analysis
+
+```{r}
+neustem_subset@reductions[["umap"]] <- neustem_subset@reductions[["rna_umap"]]
+early_subset <- subset(neustem_subset, Embryonic_day %in% c("E8", "E9", "E10",
+                                                            "E11", "E12", "E13"))
+e14_subset   <- subset(neustem_subset, Embryonic_day %in% c("E13", "E14"))
+e15_subset   <- subset(neustem_subset, Embryonic_day == "E15")
+e16_subset   <- subset(neustem_subset, Embryonic_day == "E16")
+e17_subset   <- subset(neustem_subset, Embryonic_day == "E17")
+e18_subset   <- subset(neustem_subset, Embryonic_day == "E18")
+p0_subset    <- subset(neustem_subset, Embryonic_day == "P0" )
+
+DimPlot(early_subset,
+        reduction = "umap")
+
+DimPlot(neustem_subset,
+        reduction = "umap")
+
+```
+
+```{r}
+find_traj_genes <- function(obj){
+  orig_umap <- reducedDims(obj)$UMAP
+  obj <- choose_graph_segments(obj)
+  reducedDims(obj)$UMAP <- orig_umap[colnames(obj), ]
+  obj <- cluster_cells(obj, reduction_method = "UMAP")
+  obj <- learn_graph(obj, close_loop = FALSE, use_partition = FALSE)
+  obj <- order_cells(obj, reduction_method = "UMAP")
+  return(obj)
+}
+```
+
+```{r}
+#| eval: false
+library(monocle3)
+library(SeuratWrappers)
+
+e14_cds <- as.cell_data_set(e14_subset)
+e14_cds <- preprocess_cds(e14_cds, num_dim = 50)
+e14_cds <- cluster_cells(e14_cds)
+
+e14_cds <- learn_graph(
+  e14_cds,
+  use_partition = TRUE,
+  close_loop = FALSE,  
+  learn_graph_control = list(
+    ncenter = 200,
+    prune_graph = TRUE),
+  verbose = FALSE)
+
+e14_cds <- order_cells(e14_cds, reduction_method = "UMAP")
+e14_cds <- find_traj_genes(e14_cds)
+
+neustem_subset$day_trajectories_main <- NA
+neustem_subset$day_trajectories_main[colnames(neustem_subset) %in% colnames(e14_cds)] <- "E14"
+
+e14_genes <- graph_test(e14_cds, 
+                        neighbor_graph = "principal_graph", 
+                        reduction_method = "UMAP", 
+                        cores = 4)
+
+e14_genes <- subset(e14_genes, q_value < 1e-4 & morans_I > 0.15)
+e14_genes <- e14_genes[rev(order(e14_genes$morans_test_statistic )), ]
+
+print(e14_genes)
+gene_names_e14 <- rownames(e14_genes)
+
+DimPlot(neustem_subset,
+        cells.highlight = WhichCells(neustem_subset,
+                                     expression = day_trajectories_main == "E14"),
+        raster = FALSE,
+        cols.highlight = "#2E6f40",
+        sizes.highlight = 0.2)
+```
+
+```{r}
+#| eval: false
+
+e15_cds <- as.cell_data_set(e15_subset)
+e15_cds <- preprocess_cds(e15_cds, num_dim = 50)
+e15_cds <- cluster_cells(e15_cds)
+
+e15_cds <- learn_graph(
+  e15_cds,
+  use_partition = TRUE,
+  close_loop = FALSE, 
+  learn_graph_control = list(
+    ncenter = 200,
+    prune_graph = TRUE),
+  verbose = FALSE)
+
+e15_cds <- order_cells(e15_cds, reduction_method = "UMAP")
+e15_cds <- find_traj_genes(e15_cds)
+
+neustem_subset$day_trajectories_main[colnames(neustem_subset) %in% colnames(e15_cds)] <- "E15"
+
+e15_genes <- graph_test(e15_cds, 
+                        neighbor_graph = "principal_graph", 
+                        reduction_method = "UMAP", 
+                        cores = 4)
+
+e15_genes <- subset(e15_genes, q_value < 1e-4 & morans_I > 0.15)
+e15_genes <- e15_genes[rev(order(e15_genes$morans_test_statistic )), ]
+
+print(e15_genes)
+gene_names_e15 <- rownames(e15_genes)
+
+DimPlot(neustem_subset,
+        cells.highlight = WhichCells(neustem_subset,
+                                     expression = day_trajectories_main == "E15"),
+        raster = FALSE,
+        cols.highlight = "#2E6f40",
+        sizes.highlight = 0.2)
+
+
+```
+
+```{r}
+#| eval: false
+
+e16_cds <- as.cell_data_set(e16_subset)
+e16_cds <- preprocess_cds(e16_cds, num_dim = 50)
+e16_cds <- cluster_cells(e16_cds)
+
+e16_cds <- learn_graph(
+  e16_cds,
+  use_partition = TRUE,
+  close_loop = FALSE, 
+  learn_graph_control = list(
+    ncenter = 200,
+    prune_graph = TRUE),
+  verbose = FALSE)
+
+e16_cds <- order_cells(e16_cds, reduction_method = "UMAP")
+e16_cds <- find_traj_genes(e16_cds)
+
+neustem_subset$day_trajectories_main[colnames(neustem_subset) %in% colnames(e16_cds)] <- "E16"
+
+e16_genes <- graph_test(e16_cds, 
+                        neighbor_graph = "principal_graph", 
+                        reduction_method = "UMAP", 
+                        cores = 4)
+
+e16_genes <- subset(e16_genes, q_value < 1e-4 & morans_I > 0.15)
+e16_genes <- e16_genes[rev(order(e16_genes$morans_test_statistic )), ]
+
+print(e16_genes)
+gene_names_e16 <- rownames(e16_genes)
+
+DimPlot(neustem_subset,
+        cells.highlight = WhichCells(neustem_subset,
+                                     expression = day_trajectories_main == "E16"),
+        raster = FALSE,
+        cols.highlight = "#2E6f40",
+        sizes.highlight = 0.2)
+```
+
+```{r}
+#| eval: false
+
+e17_cds <- as.cell_data_set(e17_subset)
+e17_cds <- preprocess_cds(e17_cds, num_dim = 50)
+e17_cds <- cluster_cells(e17_cds)
+
+e17_cds <- learn_graph(
+  e17_cds,
+  use_partition = TRUE,
+  close_loop = FALSE, 
+  learn_graph_control = list(
+    ncenter = 200,
+    prune_graph = TRUE),
+  verbose = FALSE)
+
+e17_cds <- order_cells(e17_cds, reduction_method = "UMAP")
+e17_cds <- find_traj_genes(e17_cds)
+
+neustem_subset$day_trajectories_main[colnames(neustem_subset) %in% colnames(e17_cds)] <- "E17"
+
+e17_genes <- graph_test(e17_cds, 
+                        neighbor_graph = "principal_graph", 
+                        reduction_method = "UMAP", 
+                        cores = 4)
+
+e17_genes <- subset(e17_genes, q_value < 1e-4 & morans_I > 0.15)
+e17_genes <- e17_genes[rev(order(e17_genes$morans_test_statistic )), ]
+
+print(e17_genes)
+gene_names_e17 <- rownames(e17_genes)
+
+DimPlot(neustem_subset,
+        cells.highlight = WhichCells(neustem_subset,
+                                     expression = day_trajectories_main == "E17"),
+        raster = FALSE,
+        cols.highlight = "#2E6f40",
+        sizes.highlight = 0.2)
+```
+
+```{r}
+#| eval: false
+
+e18_cds <- as.cell_data_set(e18_subset)
+e18_cds <- preprocess_cds(e18_cds, num_dim = 50)
+e18_cds <- cluster_cells(e18_cds)
+
+e18_cds <- learn_graph(
+  e18_cds,
+  use_partition = TRUE,
+  close_loop = FALSE, 
+  learn_graph_control = list(
+    ncenter = 200,
+    prune_graph = TRUE),
+  verbose = FALSE)
+
+e18_cds <- order_cells(e18_cds, reduction_method = "UMAP")
+e18_cds <- find_traj_genes(e18_cds)
+
+neustem_subset$day_trajectories_main[colnames(neustem_subset) %in% colnames(e18_cds)] <- "E18"
+
+e18_genes <- graph_test(e18_cds, 
+                        neighbor_graph = "principal_graph", 
+                        reduction_method = "UMAP", 
+                        cores = 4)
+
+e18_genes <- subset(e18_genes, q_value < 1e-4 & morans_I > 0.15)
+e18_genes <- e18_genes[rev(order(e18_genes$morans_test_statistic )), ]
+
+print(e18_genes)
+gene_names_e18 <- rownames(e18_genes)
+
+DimPlot(neustem_subset,
+        cells.highlight = WhichCells(neustem_subset,
+                                     expression = day_trajectories_main == "E18"),
+        raster = FALSE,
+        cols.highlight = "#2E6f40",
+        sizes.highlight = 0.2)
+```
+
+```{r}
+gene_lists <- list(
+  E14 = gene_names_e14,
+  E15 = gene_names_e15,
+  E16 = gene_names_e16,
+  E17 = gene_names_e17,
+  E18 = gene_names_e18
+)
+
+jaccard_similarity <- function(list1, list2) {
+  intersection <- length(intersect(list1, list2))
+  union <- length(union(list1, list2))
+  intersection / union
+}
+
+list_names <- names(gene_lists)
+
+sim_mat <- matrix(
+  NA,
+  nrow = length(gene_lists),
+  ncol = length(gene_lists),
+  dimnames = list(list_names, list_names)
+)
+
+for (i in seq_along(gene_lists)) {
+  for (j in seq_along(gene_lists)) {
+    sim_mat[i, j] <- jaccard_similarity(gene_lists[[i]], gene_lists[[j]])
+  }
+}
+
+library(pheatmap)
+
+pheatmap(
+  sim_mat,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  display_numbers = TRUE,
+  number_format = "%.2f",
+  border_color = NA,
+  fontsize = 40
+)
+```
+
+```{r}
+genes <- c(
+  # Inflammatory (6)
+  "Tlr4", "Il1b", "Stat1", "Padi4", "Sema4d", "Nfkb1", "Irf7", "Irf9",  
+ 
+  # ECM (10)
+  "Col1a1", "Col3a1", "Col4a1", "Col6a1", "Fn1",
+  "Itgb1", "Vegfa", "Dcn", "Adamts2", "Adamts5",
+
+  # Neural (9)
+  "Map2", "Tubb3", "Sox11", "Sox4", "Neurod2",
+  "Dcc", "Robo1", "Robo2", "Slit2", "Slit3",
+  "Nrp1", "Nrp2", "Unc5c",
+  "Sema3a", "Sema3c", "Sema3d", "Sema6a",
+  "Plxna1", "Plxna4",
+  "Epha4", "Epha5", "Ephb2",
+  "Cntn2", "Cntnap2", "Ncam2", "Ntng1", "Cxcr4", "Ret", "Epha4", "Nrp2",
+  "Sema3a", "Sema3f", "Plxna4", "Lrp1"
+)
+
+genes <- c(
+
+  # --- Inflammatory (tight + classic) ---
+  "Tlr4", "Il1b", "Nfkb1", "Irf7", "Irf9", "Stat1", "Padi4", "Sema4d",
+
+  # --- ECM (structure + remodelling + interaction) ---
+  "Col1a1", "Col3a1", "Col4a1", "Col6a1",
+  "Fn1", "Dcn", "Adamts5", "Mmp9",
+  "Itgb1", "Loxl2",
+
+  # --- Neural (development + guidance focused) ---
+  "Map2", "Tubb3", "Sox11", "Neurod2",
+  "Dcc", "Robo1", "Slit2", "Unc5c",
+  "Sema3a", "Sema3c",
+  "Plxna1",
+  "Epha4", "Ncam2"
+)
+
+# keep only genes present in the object
+genes_use <- genes[genes %in% rownames(neu_subset)]
+
+# average expression by embryonic day
+avg_expr <- AverageExpression(
+  neu_subset,
+  assays = "RNA",
+  group.by = "Embryonic_day",
+  layer = "data"
+)$RNA
+
+# subset and preserve gene order
+mat <- avg_expr[genes_use, , drop = FALSE]
+
+# set the embryonic day order you want
+day_order <- c("E12", "E13", "E14", "E15", "E16", "E17", "E18", "P0")
+day_order <- day_order[day_order %in% colnames(mat)]
+mat <- mat[, day_order, drop = FALSE]
+
+# scale by gene (row z-score)
+mat_scaled <- t(scale(t(mat)))
+mat_scaled[is.na(mat_scaled)] <- 0
+
+# plot
+pheatmap(
+  mat_scaled,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  fontsize_row = 10,
+  fontsize_col = 12,
+  angle_col = 90,
+  border_color = NA
+)
+```
