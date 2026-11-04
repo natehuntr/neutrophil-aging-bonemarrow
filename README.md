@@ -65,6 +65,23 @@ Scripts are run from the project root. They also work from inside `scripts/`;
 nothing else uses the working directory, and no path is hard-coded outside
 `config/config.yml`.
 
+### As one Quarto file
+
+`analysis/pipeline.qmd` is the whole pipeline in a single file -- every
+function, every step, the configuration embedded -- for running locally
+without the repository around it:
+
+```bash
+quarto render pipeline.qmd -P cellranger_root:/path/to/per_sample_outs
+quarto render pipeline.qmd -P steps:13          # redraw the figures only
+```
+
+Steps are resumable (each writes `results/logs/stepNN.done`), each logs to
+`results/logs/stepNN.log`, and a failed step is reported in the document
+rather than stopping the render. The file is generated from `R/`, `scripts/`
+and `config/` by `Rscript scripts/build_pipeline_qmd.R`; re-run that after
+changing any of them.
+
 ## Layout
 
 ```
