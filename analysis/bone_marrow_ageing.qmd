@@ -1,0 +1,898 @@
+---
+title: "bone_marrow_ageing"
+subtitle: "Neutrophil development across age, male and female bone marrow (CITE-seq)"
+format:
+  html:
+    toc: true
+    code-fold: false
+    embed-resources: true
+editor: visual
+---
+
+A simpler rewrite of `docs/original/bone_marrowaging.qmd`, with the fixes
+from the pipeline review folded in. Each change from the original is marked
+**Changed:** where it happens.
+
+**What the design can and cannot say.** Each sex is one 10x library, so every
+male-vs-female number is also a library-vs-library number. Ages are hashed
+*within* a library, so age comparisons within a sex are free of batch. Each
+age is one hashtag pooling six mice: cells are pseudoreplicates, so p-values
+and intervals describe these pools of cells, not variation between mice. Read
+the results as hypotheses for per-mouse validation.
+
+# Setup
+
+```{r}
+library(Seurat)
+library(SoupX)
+library(scDblFinder)
+library(scuttle)
+library(SingleCellExperiment)
+library(celldex)
+library(SingleR)
+library(CytoTRACE2)
+library(UCell)
+library(DropletUtils)
+library(monocle3)
+library(glmGamPoi)
+library(fgsea)
+library(msigdbr)
+library(Matrix)
+library(matrixStats)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+set.seed(42)
+
+data_dir <- "/Users/costahn/Desktop/Aging Mouse Data/CITE-seq/aging_BM/per_sample_outs"
+out_dir  <- "results"
+dir.create(file.path(out_dir, "figures"), recursive = TRUE, showWarnings = FALSE)
+
+samples    <- c(male = "MCC8209A3_Male_BM_3", female = "MCC8209A4_Female_BM_4")
+hto_to_age <- c(Ms.Hashtag1 = "3m", Ms.Hashtag2 = "9m",
+                Ms.Hashtag3 = "12m", Ms.Hashtag4 = "18m")
+ages       <- c("3m", "9m", "12m", "18m")
+stages     <- c("GMPs", "proNeu", "preNeu", "immature", "mature")
+min_cells  <- 50      # no stratum smaller than this is analysed
+n_perm     <- 100     # permutations for the 3m vs 18m thresholds
+glm_n_perm <- 20      # refits per NB-GLM null (slow: lower for a quick pass)
+
+sex_cols   <- c(female = "#2a78d6", male = "#eb6834")
+stage_cols <- c(GMPs = "#86b6ef", proNeu = "#5598e7", preNeu = "#2a78d6",
+                immature = "#1c5cab", mature = "#104281")
+theme_set(theme_minimal(base_size = 11))
+
+save_plot <- function(p, name, width = 9, height = 6)
+  ggsave(file.path(out_dir, "figures", paste0(name, ".png")), p,
+         width = width, height = height, dpi = 150, bg = "white")
+```
+
+# 1. Load and QC each library
+
+The same steps as the original male and female sections, written once and run
+for each sex.
+
+```{r}
+load_sample <- function(sex) {
+  sample_id <- samples[[sex]]
+  raw_data      <- Read10X(file.path(data_dir, sample_id, "sample_raw_feature_bc_matrix"))
+  filtered_data <- Read10X(file.path(data_dir, sample_id, "sample_filtered_feature_bc_matrix"))
+
+  raw_gex      <- raw_data$`Gene Expression`
+  filtered_gex <- filtered_data$`Gene Expression`
+
+  # Explicit zero-pad instead of intersect
+  missing_genes <- setdiff(rownames(raw_gex), rownames(filtered_gex))
+  if (length(missing_genes) > 0) {
+    pad <- Matrix(0, nrow = length(missing_genes), ncol = ncol(filtered_gex), sparse = TRUE,
+                  dimnames = list(missing_genes, colnames(filtered_gex)))
+    filtered_gex <- rbind(filtered_gex, pad)
+  }
+  filtered_gex <- filtered_gex[rownames(raw_gex), ]
+
+  # SoupX ambient correction, with a quick clustering to satisfy its requirement
+  sc <- SoupChannel(tod = raw_gex, toc = filtered_gex, channelName = sample_id)
+  quick <- CreateSeuratObject(counts = filtered_gex)
+  quick <- NormalizeData(quick, verbose = FALSE)
+  quick <- FindVariableFeatures(quick, verbose = FALSE)
+  quick <- ScaleData(quick, verbose = FALSE)
+  quick <- RunPCA(quick, npcs = 30, verbose = FALSE)
+  quick <- FindNeighbors(quick, dims = 1:30, verbose = FALSE)
+  quick <- FindClusters(quick, resolution = 0.5, verbose = FALSE)
+  sc <- setClusters(sc, setNames(as.character(quick$seurat_clusters), colnames(quick)))
+  sc <- autoEstCont(sc)
+  message(sex, ": ", round(100 * sc$fit$rhoEst, 1), "% of counts estimated ambient")
+
+  # Changed: the object is built from the SoupX-ADJUSTED counts. The original
+  # computed them (soup_male_bm) but built male_bm from filtered_gex.
+  obj <- CreateSeuratObject(counts = adjustCounts(sc, roundToInt = TRUE), project = sample_id)
+  obj$sex <- sex
+
+  # ADT: log1p, minus each cell's median isotype signal
+  adt <- filtered_data$`Antibody Capture`[, colnames(obj)]
+  hto_features     <- names(hto_to_age)
+  adt_features     <- setdiff(rownames(adt), hto_features)
+  isotype_features <- grep("^Isotype", adt_features, value = TRUE)
+  adt_log <- log1p(as.matrix(adt[adt_features, ]))
+  adt_centred <- sweep(adt_log, 2, colMedians(adt_log[isotype_features, , drop = FALSE]), "-")
+
+  obj[["ADT"]] <- CreateAssayObject(counts = adt[adt_features, ])
+  obj[["ADT"]]$data <- adt_centred
+  obj[["HTO"]] <- CreateAssayObject(counts = adt[hto_features, ])
+
+  # Hashtags -> age
+  obj <- NormalizeData(obj, assay = "HTO", normalization.method = "CLR", margin = 2)
+  obj <- MULTIseqDemux(obj, assay = "HTO", autoThresh = TRUE)
+  obj$MULTI_ID <- as.character(obj$MULTI_ID)
+  obj$age <- unname(hto_to_age[obj$MULTI_ID])
+  obj$age_sex <- paste0(obj$age, "_", toupper(substr(sex, 1, 1)))
+
+  # QC metrics
+  obj$log10GenesPerUMI <- log10(obj$nFeature_RNA) / log10(obj$nCount_RNA)
+  obj$mitoRatio <- PercentageFeatureSet(obj, pattern = "^mt-") / 100
+  obj$riboRatio <- PercentageFeatureSet(obj, pattern = "^Rp[sl]") / 100
+  obj$percent.hb <- PercentageFeatureSet(obj, features = grep("^(Hba|Hbb)", rownames(obj), value = TRUE))
+
+  # Doublets, per hashtag group
+  sce <- SingleCellExperiment(list(counts = LayerData(obj, assay = "RNA", layer = "counts")))
+  sce <- scDblFinder(sce, samples = obj$MULTI_ID)
+  obj$scDblFinder.class <- sce$scDblFinder.class
+  obj
+}
+
+bm <- lapply(names(samples), load_sample)
+names(bm) <- names(samples)
+```
+
+```{r}
+VlnPlot(bm$male, features = c("log10GenesPerUMI", "mitoRatio", "percent.hb"), group.by = "age")
+VlnPlot(bm$female, features = c("log10GenesPerUMI", "mitoRatio", "percent.hb"), group.by = "age")
+```
+
+**Changed: QC thresholds are set per library by median absolute deviation**,
+not one fixed cutoff. Mature neutrophils carry the least RNA, so a fixed
+cutoff removes them first, and removes more from the shallower library.
+Every cell gets a `qc_status` saying why it was kept or removed, and the
+surface protein of every hashtagged cell is kept *before* filtering: section 4
+uses it to check whether QC, rather than ageing, removed mature cells.
+
+```{r}
+qc_status <- function(obj) {
+  status <- rep("pass", ncol(obj))
+  status[!obj$MULTI_ID %in% names(hto_to_age)] <- "no sample hashtag"
+  status[status == "pass" & obj$scDblFinder.class != "singlet"] <- "doublet"
+
+  singlet <- status == "pass"
+  sce <- SingleCellExperiment(list(counts = LayerData(obj, assay = "RNA", layer = "counts")[, singlet]))
+  outlier <- perCellQCFilters(perCellQCMetrics(sce), nmads = 3)$discard
+  status[which(singlet)[outlier]] <- "RNA QC: count/feature outlier"
+  status[status == "pass" & !(obj$mitoRatio < 0.2)] <- "RNA QC: mitochondrial"
+  status[status == "pass" & !(obj$percent.hb < 10)] <- "RNA QC: haemoglobin"
+  status
+}
+
+protein_preqc <- list()
+for (sex in names(bm)) {
+  bm[[sex]]$qc_status <- qc_status(bm[[sex]])
+  print(table(bm[[sex]]$qc_status))
+
+  hashtagged <- bm[[sex]]$qc_status != "no sample hashtag"
+  protein_preqc[[sex]] <- data.frame(
+    barcode = colnames(bm[[sex]])[hashtagged],
+    sex = sex,
+    age = bm[[sex]]$age[hashtagged],
+    qc_status = bm[[sex]]$qc_status[hashtagged],
+    t(as.matrix(LayerData(bm[[sex]], assay = "ADT", layer = "data")[, hashtagged])),
+    check.names = FALSE)
+
+  bm[[sex]] <- subset(bm[[sex]], cells = colnames(bm[[sex]])[bm[[sex]]$qc_status == "pass"])
+  message(sex, ": ", ncol(bm[[sex]]), " cells pass QC")
+}
+saveRDS(protein_preqc, file.path(out_dir, "protein_preqc.rds"))
+```
+
+# 2. Normalise and label cells
+
+```{r}
+for (sex in names(bm)) {
+  obj <- bm[[sex]]
+  DefaultAssay(obj) <- "RNA"
+  obj <- NormalizeData(obj)
+  obj <- FindVariableFeatures(obj)
+  obj <- ScaleData(obj, features = VariableFeatures(obj))
+  obj <- RunPCA(obj, assay = "RNA")
+  obj <- RunUMAP(obj, reduction = "pca", dims = 1:15, reduction.name = "umap")
+
+  ref <- fetchReference("immgen", "2024-02-26")
+  sce <- as.SingleCellExperiment(obj, assay = "RNA")
+  obj$singleR_main_label <- SingleR(test = sce, ref = ref, labels = ref$label.main)$pruned.labels
+  obj$singleR_fine_label <- SingleR(test = sce, ref = ref, labels = ref$label.fine)$pruned.labels
+  obj$singleR_main_label[is.na(obj$singleR_main_label)] <- "NA"
+  obj$singleR_fine_label[is.na(obj$singleR_fine_label)] <- "NA"
+  bm[[sex]] <- obj
+}
+
+immgen_label_map <- c(
+  "Stem cells (SC.MEP)"         = "MEP",
+  "Stem cells (MLP)"            = "MLP",
+  "Stem cells (SC.MDP)"         = "MDP",
+  "Stem cells (SC.CMP.DR)"      = "CMP",
+  "Stem cells (GMP)"            = "GMP",
+  "Stem cells (SC.CDP)"         = "CDP",
+  "Stem cells (SC.ST34F)"       = "ST-HSC (CD34+ Flt3-)",
+  "Stem cells (SC.CD150-CD48-)" = "SLAM MPP",
+  "Stem cells (SC.LT34F)"       = "LT-HSC (CD34- Flt3-)",
+  "Stem cells (SC.MPP34F)"      = "MPP (CD34+ Flt3-)",
+  "Stem cells (SC.STSL)"        = "ST-HSC (SLAM)",
+  "Stem cells (LTHSC)"          = "LT-HSC",
+  "Stem cells (proB.CLP)"       = "CLP / pro-B",
+  "Neutrophils (GN)"            = "Neutrophils",
+  "Neutrophils (GN.ARTH)"       = "Neutrophils",
+  "Neutrophils (GN.URAC)"       = "Neutrophils",
+  "Neutrophils (GN.Thio)"       = "Neutrophils"
+)
+progenitors <- setdiff(unname(immgen_label_map), "Neutrophils")
+
+for (sex in names(bm)) {
+  lab <- unname(immgen_label_map[bm[[sex]]$singleR_fine_label])
+  bm[[sex]]$fine_label_readable <- ifelse(is.na(lab), bm[[sex]]$singleR_fine_label, lab)
+}
+
+DimPlot(bm$male, reduction = "umap", group.by = "singleR_main_label") +
+  DimPlot(bm$female, reduction = "umap", group.by = "singleR_main_label")
+```
+
+# 3. Merge, stage the granulocytes, match depth
+
+```{r}
+# add.cell.ids stops barcodes shared by the two libraries from colliding
+bm_merge <- merge(bm$female, bm$male, add.cell.ids = c("female", "male"), merge.data = TRUE)
+bm_merge <- JoinLayers(bm_merge, assay = "RNA")
+bm_merge <- NormalizeData(bm_merge)
+bm_merge <- FindVariableFeatures(bm_merge)
+bm_merge <- ScaleData(bm_merge, features = VariableFeatures(bm_merge))
+bm_merge <- RunPCA(bm_merge)
+bm_merge <- RunUMAP(bm_merge, dims = 1:15)
+DimPlot(bm_merge, group.by = "sex", split.by = "age")
+
+gmp_neu <- subset(bm_merge, fine_label_readable %in% c("GMP", "Neutrophils"))
+gmp_neu <- FindVariableFeatures(gmp_neu)
+gmp_neu <- ScaleData(gmp_neu, features = VariableFeatures(gmp_neu))
+gmp_neu <- RunPCA(gmp_neu)
+gmp_neu <- RunUMAP(gmp_neu, dims = 1:15)
+```
+
+**Changed: stage comes from rank-based marker scores (UCell), not a hand-made
+cluster-to-stage map.** The cluster map had to be redone every time cluster
+numbering changed, and proNeu2 is merged into proNeu (its markers overlap
+proNeu and preNeu almost completely; only 3 of 4512 cells were called proNeu2).
+
+```{r}
+stage_signatures <- list(
+  GMPs     = c("Elane", "Mpo", "Prtn3", "Ctsg", "Ms4a3", "Kit", "Cd34"),
+  proNeu   = c("Elane", "Mpo", "Prtn3", "Ctsg", "Cebpe", "Gfi1", "Fcnb", "Il5ra"),
+  preNeu   = c("Ltf", "Camp", "Ngp", "Lcn2", "Chil3", "Fcnb", "Mki67"),
+  immature = c("Ltf", "Camp", "Lcn2", "Mmp8", "Cd177", "Ifitm1", "Chil3"),
+  mature   = c("Cxcr2", "Sell", "Il1b", "Csf3r", "Mmp9", "S100a8", "S100a9", "Retnlg", "Fpr1")
+)
+gmp_neu <- AddModuleScore_UCell(gmp_neu, features = stage_signatures, name = "_stage")
+stage_scores <- as.matrix(gmp_neu@meta.data[, paste0(stages, "_stage")])
+gmp_neu$stage <- factor(stages[max.col(stage_scores, ties.method = "first")], levels = stages)
+
+DimPlot(gmp_neu, group.by = "stage", cols = stage_cols) +
+  DimPlot(gmp_neu, group.by = "sex", cols = sex_cols)
+table(gmp_neu$stage, gmp_neu$sex)
+```
+
+**Changed: depth matching inside each stage.** The libraries differ several-fold
+in depth, and mature neutrophils are shallow by nature. Thinning every cell
+toward one global target left the shallow cells untouched (male mature cells
+sat at 330-590 UMIs against a 2225 target), so their comparisons ran on counts
+several-fold apart. Here each stratum is thinned toward its own shallowest
+group:
+
+* `RNAmatched`: ages equalised within each sex x stage, for age comparisons.
+* `RNAmatched_sex`: every age x sex group equalised within each stage, for
+  anything that compares the two libraries.
+
+```{r}
+downsample_within <- function(counts, groups, strata) {
+  totals <- colSums(counts)
+  prop <- rep(1, ncol(counts))
+  for (st in unique(strata)) {
+    idx <- which(strata == st)
+    sizes <- table(groups[idx])
+    big <- names(sizes)[sizes >= min_cells]
+    if (!length(big)) big <- names(sizes)
+    target <- min(sapply(big, function(g) median(totals[idx][groups[idx] == g])))
+    prop[idx] <- pmin(1, target / pmax(totals[idx], 1))
+  }
+  downsampleMatrix(counts, prop = prop, bycol = TRUE)
+}
+
+counts <- LayerData(gmp_neu, assay = "RNA", layer = "counts")
+gmp_neu[["RNAmatched"]] <- CreateAssayObject(
+  counts = downsample_within(counts, gmp_neu$age, paste(gmp_neu$sex, gmp_neu$stage)))
+gmp_neu[["RNAmatched_sex"]] <- CreateAssayObject(
+  counts = downsample_within(counts, gmp_neu$age_sex, as.character(gmp_neu$stage)))
+gmp_neu <- NormalizeData(gmp_neu, assay = "RNAmatched")
+gmp_neu <- NormalizeData(gmp_neu, assay = "RNAmatched_sex")
+DefaultAssay(gmp_neu) <- "RNA"
+
+# Median UMIs per stage x sex x age, before and after
+depth <- gmp_neu@meta.data |>
+  mutate(raw = colSums(counts),
+         matched = colSums(LayerData(gmp_neu, assay = "RNAmatched", layer = "counts"))) |>
+  group_by(stage, sex, age) |>
+  summarise(n = n(), median_umi_raw = median(raw), median_umi_matched = median(matched), .groups = "drop")
+depth
+```
+
+CytoTRACE2 potency, scored on the matched counts (it reads transcriptional
+complexity, so it is the measure most exposed to depth):
+
+```{r}
+potency <- cytotrace2(as.matrix(LayerData(gmp_neu, assay = "RNAmatched", layer = "counts")),
+                      is_seurat = FALSE, species = "mouse")
+gmp_neu <- AddMetaData(gmp_neu, potency)
+saveRDS(gmp_neu, file.path(out_dir, "gmp_neutrophils.rds"))
+```
+
+# 4. Does the stage mix change with age?
+
+The most direct reading of "how does neutrophil development change with age".
+Composition within a sex is batch-free: all ages share the library.
+
+```{r}
+wilson <- function(x, n, z = 1.96) {
+  p <- x / n; d <- 1 + z^2 / n
+  centre <- (p + z^2 / (2 * n)) / d
+  half <- z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2)) / d
+  data.frame(ci_low = pmax(0, centre - half), ci_high = pmin(1, centre + half))
+}
+
+composition_table <- function(stage, age, sex, levels) {
+  df <- data.frame(stage = factor(stage, levels = levels), age = factor(age, levels = ages),
+                   sex = sex) |> na.omit() |>
+    count(sex, age, stage, .drop = FALSE) |>
+    group_by(sex, age) |> mutate(n_group = sum(n), proportion = n / n_group) |> ungroup()
+  cbind(df, wilson(df$n, df$n_group))
+}
+
+# Log-odds change in a stage's share per age step, from a binomial GLM.
+# Changed: this test existed in the pipeline but never ran (it looped over
+# levels() of a character column, which is NULL).
+composition_trends <- function(comp) {
+  comp |> group_by(sex, stage) |> filter(sum(n) >= 20) |>
+    group_modify(function(d, key) {
+      fit <- glm(cbind(n, n_group - n) ~ as.integer(age), family = binomial, data = d)
+      data.frame(prop_first = d$proportion[1], prop_last = d$proportion[nrow(d)],
+                 log_odds_per_step = coef(fit)[2],
+                 p_value = coef(summary(fit))[2, 4])
+    }) |> ungroup() |> group_by(sex) |> mutate(padj = p.adjust(p_value, "BH")) |> ungroup()
+}
+
+stage_comp <- composition_table(gmp_neu$stage, gmp_neu$age, gmp_neu$sex, stages)
+stage_trends <- composition_trends(stage_comp)
+write.csv(stage_comp, file.path(out_dir, "stage_composition.csv"), row.names = FALSE)
+write.csv(stage_trends, file.path(out_dir, "stage_age_trends.csv"), row.names = FALSE)
+stage_trends
+
+p <- ggplot(stage_comp, aes(age, proportion, fill = stage)) +
+  geom_col(width = 0.7, colour = "white") +
+  facet_wrap(~ sex) + scale_fill_manual(values = stage_cols) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Share of staged cells", title = "Maturation stage mix by age")
+p; save_plot(p, "stage_composition", 9, 5)
+
+p <- ggplot(stage_comp, aes(age, proportion, colour = sex, group = sex)) +
+  geom_line() + geom_pointrange(aes(ymin = ci_low, ymax = ci_high), size = 0.3) +
+  facet_wrap(~ stage, scales = "free_y", nrow = 1) + scale_colour_manual(values = sex_cols) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Share of staged cells", caption = "Wilson intervals on cells, not mice")
+p; save_plot(p, "stage_trends", 13, 4)
+```
+
+# 5. Protein gate: did RNA QC remove the mature cells?
+
+**New.** The male library loses immature and mature cells with age, and those
+are the lowest-RNA cells, so the trend could be RNA QC removing aged mature
+neutrophils. Surface protein does not depend on RNA capture. Every hashtagged
+singlet (QC failures included) is staged by Ly6G / CD11b / CXCR2, with
+thresholds set per library (each was stained separately). If protein-defined
+mature cells are there before QC and missing after it, the RNA trend is QC loss.
+
+```{r}
+# A positive threshold: the density valley between two modes when the marker
+# is bimodal, otherwise the 99th percentile of the isotype controls.
+valley <- function(x) {
+  d <- density(x[is.finite(x)], n = 512)
+  peaks <- which(diff(sign(diff(d$y))) == -2) + 1
+  peaks <- peaks[order(-d$y[peaks])][1:2]
+  if (anyNA(peaks) || abs(diff(d$x[peaks])) < 0.5) return(NA)
+  lo <- min(peaks); hi <- max(peaks)
+  v <- lo - 1 + which.min(d$y[lo:hi])
+  if (d$y[v] > 0.8 * min(d$y[peaks])) NA else d$x[v]
+}
+threshold <- function(x, background) {
+  v <- valley(x)
+  if (is.finite(v) && v > background) v else background
+}
+find_marker <- function(df, pattern) grep(pattern, names(df), value = TRUE, ignore.case = TRUE)[1]
+
+gate_library <- function(df) {
+  df <- df[df$qc_status != "doublet", ]
+  iso <- grep("^Isotype", names(df), value = TRUE)
+  background <- quantile(as.matrix(df[, iso]), 0.99)
+  ly6g  <- df[[find_marker(df, "Ly.?6G")]]
+  cd11b <- df[[find_marker(df, "CD11b")]]
+  cxcr2 <- df[[find_marker(df, "CXCR2|CD182")]]
+  if (is.null(ly6g) || is.null(cd11b) || is.null(cxcr2))
+    stop("the protein gate needs Ly6G, CD11b and CXCR2 on the panel")
+
+  t_cd11b <- threshold(cd11b, background)
+  myeloid <- cd11b > t_cd11b
+  t_ly6g <- threshold(ly6g[myeloid], background)
+  t_cxcr2 <- threshold(cxcr2[myeloid & ly6g > t_ly6g], background)
+  message(df$sex[1], ": thresholds CD11b ", round(t_cd11b, 2), ", Ly6G ",
+          round(t_ly6g, 2), ", CXCR2 ", round(t_cxcr2, 2))
+
+  df$protein_stage <- ifelse(!myeloid, NA,
+                      ifelse(ly6g <= t_ly6g, "Ly6G- precursor",
+                      ifelse(cxcr2 <= t_cxcr2, "Ly6G+ CXCR2- (immature-like)",
+                             "Ly6G+ CXCR2+ (mature-like)")))
+  df$passed_qc <- df$qc_status == "pass"
+  df
+}
+
+protein_stages <- c("Ly6G- precursor", "Ly6G+ CXCR2- (immature-like)", "Ly6G+ CXCR2+ (mature-like)")
+gated <- bind_rows(lapply(protein_preqc, gate_library)) |> filter(!is.na(protein_stage))
+
+# How much of each protein-defined stage RNA QC kept, per age
+retention <- gated |> group_by(sex, protein_stage, age) |>
+  summarise(n_before_qc = n(), n_passed = sum(passed_qc), .groups = "drop") |>
+  mutate(retained = n_passed / n_before_qc, age = factor(age, levels = ages))
+retention <- cbind(retention, wilson(retention$n_passed, retention$n_before_qc))
+write.csv(retention, file.path(out_dir, "protein_gate_retention.csv"), row.names = FALSE)
+
+protein_comp <- bind_rows(
+  composition_table(gated$protein_stage, gated$age, gated$sex, protein_stages) |>
+    mutate(cells = "before RNA QC"),
+  with(gated[gated$passed_qc, ], composition_table(protein_stage, age, sex, protein_stages)) |>
+    mutate(cells = "after RNA QC"))
+protein_trends <- protein_comp |> group_by(cells) |> group_modify(~ composition_trends(.x))
+write.csv(protein_trends, file.path(out_dir, "protein_stage_age_trends.csv"), row.names = FALSE)
+protein_trends
+
+p <- ggplot(retention, aes(age, retained, colour = sex, group = sex)) +
+  geom_line() + geom_pointrange(aes(ymin = ci_low, ymax = ci_high), size = 0.3) +
+  facet_wrap(~ protein_stage) + scale_colour_manual(values = sex_cols) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Kept by RNA QC",
+       title = "How much of each protein-defined stage RNA QC kept",
+       subtitle = "A fall with age in one library means QC, not the marrow, removed those cells")
+p; save_plot(p, "protein_gate_retention", 10, 4.5)
+
+p <- ggplot(protein_comp, aes(factor(age, levels = ages), proportion, fill = stage)) +
+  geom_col(width = 0.7, colour = "white") + facet_grid(cells ~ sex) +
+  scale_fill_manual(values = unname(stage_cols[c(1, 3, 5)])) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Share of protein-gated granulocytes", fill = NULL)
+p; save_plot(p, "protein_stage_composition", 9, 7)
+```
+
+# 6. Upstream: the progenitor compartment
+
+Where does a shift in granulopoiesis start? Composition of the SingleR-labelled
+progenitors, as each population's share at one age over its share across all
+ages of the same library (log2 observed / expected; 0 = as expected).
+
+```{r}
+prog <- subset(bm_merge, fine_label_readable %in% progenitors)
+prog_comp <- composition_table(prog$fine_label_readable, prog$age, prog$sex, progenitors) |>
+  group_by(sex, stage) |>
+  mutate(expected = sum(n) / sum(n_group),
+         log2_obs_exp = log2((n + 0.5) / (n_group * expected + 0.5))) |>
+  ungroup() |> filter(sum(n) >= 20, .by = c(sex, stage))
+write.csv(prog_comp, file.path(out_dir, "progenitor_composition.csv"), row.names = FALSE)
+
+p <- ggplot(prog_comp, aes(log2_obs_exp, stage, colour = sex)) +
+  geom_vline(xintercept = 0, colour = "grey50") +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  facet_wrap(~ age, nrow = 1) + scale_colour_manual(values = sex_cols) +
+  labs(x = "log2(observed / expected share)", y = NULL,
+       title = "Progenitor populations over- and under-represented by age")
+p; save_plot(p, "progenitor_imbalance", 12, 5)
+```
+
+# 7. Where cells sit along the trajectory
+
+One monocle3 trajectory over both sexes, on the matched counts, rooted at the
+GMPs programmatically (no Shiny window). **Changed:** the per-age trajectories
+and their Venn of "genes unique to each age" are dropped: the ages differ
+several-fold in cell number, so that comparison mostly measured power.
+
+```{r}
+cds <- new_cell_data_set(
+  LayerData(gmp_neu, assay = "RNAmatched", layer = "counts"),
+  cell_metadata = gmp_neu@meta.data,
+  gene_metadata = data.frame(gene_short_name = rownames(gmp_neu[["RNAmatched"]]),
+                             row.names = rownames(gmp_neu[["RNAmatched"]])))
+cds <- preprocess_cds(cds, num_dim = 50)
+cds <- reduce_dimension(cds)
+cds <- cluster_cells(cds)
+cds <- learn_graph(cds, use_partition = FALSE, close_loop = FALSE)
+
+# Root: the principal-graph node most GMPs sit closest to
+closest <- as.matrix(cds@principal_graph_aux[["UMAP"]]$pr_graph_cell_proj_closest_vertex)[colnames(cds), ]
+root <- names(which.max(table(closest[cds$stage == "GMPs"])))
+cds <- order_cells(cds, root_pr_nodes = igraph::V(principal_graph(cds)[["UMAP"]])$name[as.numeric(root)])
+gmp_neu$pseudotime <- pseudotime(cds)[colnames(gmp_neu)]
+saveRDS(cds, file.path(out_dir, "trajectory_cds.rds"))
+
+plot_cells(cds, color_cells_by = "pseudotime", label_branch_points = FALSE)
+```
+
+Each age against 3m within a sex: the median shift, the share of cells past
+the 3m median (0.5 = no shift), and a KS test. Run pooled over stages and
+within each stage. **Changed:** the within-stage version gates cell counts per
+sex *and* per age (it had pooled the sexes, so male mature at 9m, 20 cells,
+was compared).
+
+```{r}
+shift_vs_3m <- function(value, meta) {
+  rows <- list()
+  for (st in c("all stages", stages)) for (sx in names(sex_cols)) {
+    keep <- meta$sex == sx & is.finite(value) & (st == "all stages" | meta$stage == st)
+    n_age <- table(factor(meta$age[keep], levels = ages))
+    if (n_age["3m"] < min_cells) next
+    ref <- value[keep & meta$age == "3m"]
+    for (a in setdiff(names(n_age)[n_age >= min_cells], "3m")) {
+      v <- value[keep & meta$age == a]
+      rows[[length(rows) + 1]] <- data.frame(
+        stage = st, sex = sx, age = a, n = length(v),
+        median_shift = median(v) - median(ref),
+        frac_beyond_3m_median = mean(v > median(ref)),
+        ks_p = suppressWarnings(ks.test(v, ref)$p.value))
+    }
+  }
+  bind_rows(rows) |> mutate(stage = factor(stage, levels = c("all stages", stages)))
+}
+
+shifts <- bind_rows(
+  shift_vs_3m(gmp_neu$pseudotime, gmp_neu@meta.data) |> mutate(measure = "pseudotime"),
+  shift_vs_3m(gmp_neu$CytoTRACE2_Score, gmp_neu@meta.data) |> mutate(measure = "potency"))
+write.csv(shifts, file.path(out_dir, "pseudotime_potency_shifts.csv"), row.names = FALSE)
+
+p <- ggplot(shifts, aes(frac_beyond_3m_median, factor(age, levels = ages), colour = sex)) +
+  geom_vline(xintercept = 0.5, colour = "grey50") +
+  geom_point(aes(size = n), position = position_dodge(width = 0.5)) +
+  facet_grid(measure ~ stage) + scale_colour_manual(values = sex_cols) +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(x = "Share of cells past the 3m median", y = NULL,
+       subtitle = "Pooled shift with flat within-stage panels = the stage mix moving, not the cells")
+p; save_plot(p, "pseudotime_potency_shifts", 13, 5)
+```
+
+# 8. What changes between 3m and 18m, and do 9m and 12m follow?
+
+Genes are found at the extremes, where cells are most numerous, with a
+permutation threshold at 10% FDR; 9m and 12m are then read off for the same
+genes as a shape check. Run within each stage and sex, on `RNAmatched`, and
+also on surface protein (ADT), the depth-robust readout.
+
+```{r}
+endpoint_contrast <- function(expr, age, min_detected = 10, target_fdr = 0.10) {
+  keep_cells <- age %in% c("3m", "18m")
+  expr <- expr[rowSums(expr[, keep_cells] > 0) >= min_detected, , drop = FALSE]
+  effect_of <- function(lab) rowMeans(expr[, keep_cells][, lab == "18m", drop = FALSE]) -
+                             rowMeans(expr[, keep_cells][, lab == "3m", drop = FALSE])
+  effect <- effect_of(age[keep_cells])
+  perms <- sapply(seq_len(n_perm), function(i) abs(effect_of(sample(age[keep_cells]))))
+
+  # Smallest cutoff whose expected false-discovery share is <= target
+  cutoff <- NA
+  for (t in quantile(abs(effect), seq(0.5, 1, length.out = 200))) {
+    n_obs <- sum(abs(effect) > t)
+    if (n_obs && (sum(perms > t) / n_perm) / n_obs <= target_fdr) { cutoff <- t; break }
+  }
+  if (is.na(cutoff)) cutoff <- quantile(apply(perms, 2, max), 0.95)   # family-wise fallback
+
+  hits <- names(effect)[abs(effect) > cutoff]
+  if (!length(hits)) return(list(table = NULL, effect = effect))
+  present <- intersect(ages, unique(age))
+  means <- matrix(sapply(present, function(a) rowMeans(expr[hits, age == a, drop = FALSE])),
+                  nrow = length(hits), dimnames = list(NULL, paste0("mean_", present)))
+  out <- data.frame(feature = hits, effect = effect[hits], means)
+  # Do 9m and 12m sit between the endpoints, in order?
+  mid <- intersect(c("mean_9m", "mean_12m"), names(out))
+  frac <- sapply(mid, function(m) (out[[m]] - out$mean_3m) / (out$mean_18m - out$mean_3m))
+  out$monotonic <- if (length(mid)) apply(matrix(frac, nrow = nrow(out)), 1, function(f)
+    all(f >= 0 & f <= 1) && !is.unsorted(f)) else NA
+  list(table = out[order(-abs(out$effect)), ], effect = effect)
+}
+
+endpoint_genes <- list(); endpoint_adt <- list(); endpoint_gsea <- list()
+gobp <- if (packageVersion("msigdbr") >= "10.0.0") {
+  msigdbr(species = "Mus musculus", collection = "C5", subcollection = "GO:BP")
+} else {
+  msigdbr(species = "Mus musculus", category = "C5", subcategory = "GO:BP")
+}
+gobp <- split(gobp$gene_symbol, gobp$gs_name)
+
+for (st in stages) for (sx in names(sex_cols)) {
+  cells <- colnames(gmp_neu)[gmp_neu$stage == st & gmp_neu$sex == sx]
+  age <- gmp_neu$age[cells]
+  if (sum(age == "3m") < min_cells || sum(age == "18m") < min_cells) next
+  label <- paste(st, sx)
+
+  rna <- endpoint_contrast(LayerData(gmp_neu, assay = "RNAmatched", layer = "data")[, cells], age)
+  if (!is.null(rna$table)) endpoint_genes[[label]] <- mutate(rna$table, stage = st, sex = sx)
+  adt <- endpoint_contrast(LayerData(gmp_neu, assay = "ADT", layer = "data")[, cells], age,
+                           min_detected = 0)
+  if (!is.null(adt$table)) endpoint_adt[[label]] <- mutate(adt$table, stage = st, sex = sx)
+
+  ranks <- sort(rna$effect, decreasing = TRUE)
+  sets <- lapply(gobp, intersect, names(ranks))
+  gsea <- fgsea(sets[lengths(sets) >= 15 & lengths(sets) <= 500], ranks)
+  top <- gsea[which(gsea$padj < 0.05), ]
+  main <- if (nrow(top)) collapsePathways(top, sets, ranks)$mainPathways else character()
+  endpoint_gsea[[label]] <- gsea |> filter(pathway %in% main) |>
+    mutate(stage = st, sex = sx, leadingEdge = sapply(leadingEdge, paste, collapse = ";"))
+}
+
+endpoint_genes <- bind_rows(endpoint_genes)
+endpoint_adt <- bind_rows(endpoint_adt)
+endpoint_gsea <- bind_rows(endpoint_gsea)
+write.csv(endpoint_genes, file.path(out_dir, "endpoint_genes.csv"), row.names = FALSE)
+write.csv(endpoint_adt, file.path(out_dir, "endpoint_adt.csv"), row.names = FALSE)
+write.csv(endpoint_gsea, file.path(out_dir, "endpoint_gsea.csv"), row.names = FALSE)
+count(endpoint_genes, stage, sex, monotonic)
+```
+
+```{r}
+top_genes <- endpoint_genes |> group_by(stage, sex) |> slice_max(abs(effect), n = 6) |> ungroup()
+long <- tidyr::pivot_longer(top_genes, starts_with("mean_"), names_to = "age",
+                            names_prefix = "mean_", values_to = "mean") |>
+  mutate(age = factor(age, levels = ages), direction = ifelse(effect > 0, "up at 18m", "down at 18m"))
+p <- ggplot(long, aes(age, mean, group = feature, colour = direction)) +
+  geom_line() + geom_point(size = 1) +
+  geom_text(data = filter(long, age == "18m"), aes(label = feature), hjust = -0.2,
+            size = 2.6, colour = "black", check_overlap = TRUE) +
+  facet_wrap(~ paste(stage, sex), scales = "free_y") +
+  scale_colour_manual(values = c("down at 18m" = "#2a78d6", "up at 18m" = "#e34948")) +
+  labs(x = NULL, y = "Mean normalised expression",
+       title = "Genes differing 3m vs 18m, followed through every age")
+p; save_plot(p, "endpoint_gene_profiles", 12, 8)
+
+p <- endpoint_gsea |> group_by(stage, sex) |> slice_max(abs(NES), n = 6) |> ungroup() |>
+  mutate(pathway = tolower(gsub("_", " ", sub("^GOBP_", "", pathway)))) |>
+  ggplot(aes(NES, reorder(pathway, NES), fill = NES > 0)) + geom_col() +
+  facet_wrap(~ paste(stage, sex), scales = "free_y", ncol = 2) +
+  scale_fill_manual(values = c(`TRUE` = "#e34948", `FALSE` = "#2a78d6"), guide = "none") +
+  labs(x = "NES (positive: higher at 18m)", y = NULL)
+p; save_plot(p, "endpoint_gsea", 13, 10)
+
+p <- endpoint_adt |> mutate(feature = sub("^(Ms|HuMs)\\.", "", feature)) |>
+  ggplot(aes(paste(stage, sex), feature, fill = effect)) + geom_tile(colour = "white") +
+  scale_fill_gradient2(low = "#2a78d6", mid = "#f0efec", high = "#e34948") +
+  labs(x = NULL, y = NULL, fill = "18m - 3m", title = "Surface proteins changing 3m -> 18m") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+p; save_plot(p, "endpoint_adt", 9, 8)
+```
+
+# 9. NB-GLM models
+
+Per sex: does a gene change with age? Jointly: does it change differently in
+the two sexes? The cutoff comes from refitting on shuffled labels, not from BH
+on per-cell p-values. **Changed: stage is a covariate**, and age is shuffled
+within stage for the null. Without it, the models pooled stages whose mix moves
+in opposite directions in the two sexes, and the top "interaction" genes
+(Mmp8, Mmp9, Retnlg) were just the stage shift.
+
+```{r}
+neus <- subset(gmp_neu, CytoTRACE2_Potency == "Differentiated")
+neus$stage <- droplevels(neus$stage)
+meta <- neus@meta.data[, c("age", "sex", "stage")]
+meta$age <- factor(meta$age, levels = ages)
+meta$sex <- factor(meta$sex)
+counts <- LayerData(neus, assay = "RNAmatched_sex", layer = "counts")
+counts <- counts[rowSums(counts > 0) >= 10, ]
+
+lrt <- function(cts, md, full, reduced)
+  test_de(glm_gp(cts, design = full, col_data = md, size_factors = "normed_sum"),
+          reduced_design = reduced)
+shuffle_age <- function(md) { md$age <- ave(as.character(md$age), md$stage, FUN = sample)
+                              md$age <- factor(md$age, levels = ages); md }
+shuffle_sex <- function(md) { md$sex <- factor(ave(as.character(md$sex), md$age, md$stage, FUN = sample)); md }
+
+# Largest p-value cutoff whose empirical FDR (from the permuted fits) is <= 5%
+calibrate <- function(obs_p, null_p, target = 0.05) {
+  grid <- 10^seq(-10, log10(0.05), length.out = 300)
+  fdr <- sapply(grid, function(cut) mean(null_p < cut) * length(obs_p) / max(1, sum(obs_p < cut)))
+  if (any(fdr <= target)) grid[max(which(fdr <= target))] else 0
+}
+
+run_model <- function(cts, md, full, reduced, shuffle) {
+  obs <- lrt(cts, md, full, reduced)
+  null_p <- unlist(lapply(seq_len(glm_n_perm), function(i) lrt(cts, shuffle(md), full, reduced)$pval))
+  cut <- calibrate(obs$pval, null_p)
+  obs[obs$pval < cut, ] |> arrange(pval)
+}
+
+glm_hits <- list()
+for (sx in levels(meta$sex)) {
+  i <- meta$sex == sx
+  glm_hits[[sx]] <- run_model(counts[, i], droplevels(meta[i, ]), ~ stage + age, ~ stage, shuffle_age)
+}
+glm_hits$interaction <- run_model(counts, meta, ~ stage + age * sex, ~ stage + age + sex, shuffle_sex)
+for (nm in names(glm_hits))
+  write.csv(glm_hits[[nm]], file.path(out_dir, paste0("glm_", nm, ".csv")), row.names = FALSE)
+sapply(glm_hits, nrow)
+```
+
+Along the trajectory: does a gene's developmental profile differ with age, with
+sex, or in shape? 3m vs 18m only, on the pseudotime span every group covers
+(group-specific splines extrapolate freely outside their own range).
+
+```{r}
+cd <- gmp_neu@meta.data |> mutate(cell = colnames(gmp_neu), pt = pseudotime) |>
+  filter(is.finite(pt), age %in% c("3m", "18m")) |>
+  mutate(age = factor(age, levels = c("3m", "18m")), sex = factor(sex))
+span <- cd |> group_by(age, sex) |> summarise(lo = min(pt), hi = max(pt), .groups = "drop")
+cd <- filter(cd, pt >= max(span$lo), pt <= min(span$hi))
+cts <- LayerData(gmp_neu, assay = "RNAmatched_sex", layer = "counts")[, cd$cell]
+cts <- cts[rowSums(cts > 0) >= 10, ]
+
+shuffle_both <- function(md) { i <- sample(nrow(md)); md$age <- md$age[i]; md$sex <- md$sex[i]; md }
+f_full   <- ~ splines::ns(pt, 3) * age * sex
+traj_any <- run_model(cts, cd, ~ splines::ns(pt, 3) + age * sex + splines::ns(pt, 3):age +
+                        splines::ns(pt, 3):sex, ~ splines::ns(pt, 3), shuffle_both)
+traj_age <- run_model(cts, cd, f_full, ~ splines::ns(pt, 3) * sex, shuffle_both)
+traj_sex <- run_model(cts, cd, f_full, ~ splines::ns(pt, 3) * age, shuffle_both)
+
+traj_any$driver <- with(traj_any, ifelse(name %in% traj_age$name & name %in% traj_sex$name, "both",
+                                  ifelse(name %in% traj_age$name, "age",
+                                  ifelse(name %in% traj_sex$name, "sex", "joint only"))))
+write.csv(traj_any, file.path(out_dir, "trajectory_model_hits.csv"), row.names = FALSE)
+table(traj_any$driver)
+```
+
+# 10. Sex x age interaction GSEA, per stage
+
+Is a pathway's age trend different between the libraries? Per sex, Spearman rho
+of each gene against age; the Fisher-z difference ranks genes; preranked GSEA.
+A positive NES means only "the age trend is more positive in males", and each
+pathway's leading edge says what the genes actually do. **Changed:** each stage
+keeps the ages at which both sexes have enough cells (the original required all
+of them, which ruled out mature and immature entirely), it uses `RNAmatched_sex`,
+and sex-chromosome genes are left out of the ranking (they top any contrast of
+the two libraries and say nothing about granulopoiesis).
+
+```{r}
+sex_chr <- c("Xist", "Tsix", "Ddx3y", "Uty", "Eif2s3y", "Kdm5d", "Jpx", "Ftx")
+months <- c("3m" = 3, "9m" = 9, "12m" = 12, "18m" = 18)
+
+rho_by_sex <- function(expr, age_months) {
+  expr <- expr[rowMeans(expr > 0) >= 0.05, , drop = FALSE]
+  # apply() over genes returns cells x genes: one column per gene
+  rho <- cor(apply(as.matrix(expr), 1, rank), rank(age_months))[, 1]
+  data.frame(gene = rownames(expr), rho = rho, n = ncol(expr))
+}
+
+interaction_gsea <- list()
+for (st in c("GMPs", "preNeu", "immature", "mature")) {
+  in_stage <- gmp_neu$stage == st
+  n <- table(factor(gmp_neu$age[in_stage], levels = ages), gmp_neu$sex[in_stage])
+  use <- rownames(n)[apply(n >= min_cells, 1, all)]
+  if (length(use) < 2) next
+  cells <- colnames(gmp_neu)[in_stage & gmp_neu$age %in% use]
+  expr <- LayerData(gmp_neu, assay = "RNAmatched_sex", layer = "data")
+
+  r <- lapply(c(male = "male", female = "female"), function(sx) {
+    cc <- cells[gmp_neu$sex[cells] == sx]
+    rho_by_sex(expr[, cc], months[gmp_neu$age[cc]])
+  })
+  tab <- inner_join(r$male, r$female, by = "gene", suffix = c("_M", "_F")) |>
+    filter(!gene %in% sex_chr, is.finite(rho_M), is.finite(rho_F)) |>
+    mutate(z_diff = (atanh(pmin(abs(rho_M), 0.999) * sign(rho_M)) -
+                     atanh(pmin(abs(rho_F), 0.999) * sign(rho_F))) /
+                    sqrt(1 / (n_M - 3) + 1 / (n_F - 3)))
+  ranks <- setNames(tab$z_diff, tab$gene)
+  sets <- lapply(gobp, intersect, names(ranks))
+  res <- fgsea(sets[lengths(sets) >= 15 & lengths(sets) <= 500], ranks)
+  top <- res[which(res$padj < 0.05), ]
+  main <- if (nrow(top)) collapsePathways(top, sets, ranks)$mainPathways else character()
+  interaction_gsea[[st]] <- res |> filter(pathway %in% main) |>
+    mutate(stage = st, ages = paste(use, collapse = ","),
+           trend_more_positive_in = ifelse(NES > 0, "male", "female"),
+           mean_rho_M = sapply(leadingEdge, function(g) mean(tab$rho_M[tab$gene %in% g])),
+           mean_rho_F = sapply(leadingEdge, function(g) mean(tab$rho_F[tab$gene %in% g])),
+           leadingEdge = sapply(leadingEdge, paste, collapse = ";"))
+}
+interaction_gsea <- bind_rows(interaction_gsea)
+write.csv(interaction_gsea, file.path(out_dir, "interaction_gsea.csv"), row.names = FALSE)
+interaction_gsea |> select(stage, ages, pathway, NES, padj, mean_rho_M, mean_rho_F)
+```
+
+# 11. Sex-difference candidates for orthogonal validation
+
+Not a test of sex: sex is the library. A ranked list of gene-set scores that
+differ between the libraries, each with the assay that could test it. Three
+checks decide what to believe:
+
+* **Direction.** The female library is deeper, so female-high is what the
+  confound predicts. Male-high candidates had to overcome it.
+* **A within-library null.** The same scores compared between random halves of
+  the female library, within the stage: a real difference has to beat that.
+* **Depth matching.** The effect on `RNAmatched_sex` should keep its sign on
+  unmatched counts.
+
+```{r}
+assay_keywords <- list(
+  "mitochondrial content" = "OXIDATIVE_PHOSPHORYLATION|ELECTRON_TRANSPORT|ATP_SYNTHESIS|RESPIRATORY_CHAIN",
+  "ROS" = "REACTIVE_OXYGEN|OXIDATIVE_STRESS|RESPIRATORY_BURST",
+  "NETs" = "EXTRACELLULAR_TRAP|CHROMATIN_DECONDENSATION",
+  "phagocytosis" = "PHAGOCYT|DEFENSE_RESPONSE_TO_BACTERIUM",
+  "glucose uptake" = "GLYCOLY|GLUCOSE_IMPORT|HEXOSE",
+  "CBC" = "GRANULOCYTE_DIFFERENTIATION|MYELOID_CELL_DIFFERENTIATION|CELL_CYCLE_PHASE_TRANSITION")
+candidate_sets <- lapply(assay_keywords, function(k) grep(k, names(gobp), value = TRUE))
+assay_of <- setNames(rep(names(candidate_sets), lengths(candidate_sets)), unlist(candidate_sets))
+sets <- lapply(gobp[names(assay_of)], intersect, rownames(gmp_neu))
+sets <- sets[lengths(sets) >= 15 & lengths(sets) <= 500]
+
+score <- function(obj, assay) {
+  s <- AddModuleScore_UCell(obj, features = sets, assay = assay, name = "")
+  as.matrix(s@meta.data[, names(sets)])
+}
+smd <- function(x, g) (mean(x[g == "female"]) - mean(x[g == "male"])) / sd(x)
+
+candidates <- list()
+for (st in stages) {
+  obj <- subset(gmp_neu, stage == st)
+  if (min(table(obj$sex)) < min_cells) next
+  matched <- score(obj, "RNAmatched_sex")
+  raw <- score(obj, "RNA")
+  effect <- apply(matched, 2, smd, g = obj$sex)
+  effect_raw <- apply(raw, 2, smd, g = obj$sex)
+  ci <- apply(matched, 2, function(x) quantile(replicate(200, {
+    i <- sample(length(x), replace = TRUE); smd(x[i], obj$sex[i]) }), c(0.025, 0.975)))
+
+  # Random halves of the female library, same stage: the largest |effect| any
+  # set reaches when no sex difference exists
+  fem <- matched[obj$sex == "female", , drop = FALSE]
+  null_max <- replicate(100, {
+    g <- sample(rep(c("female", "male"), length.out = nrow(fem)))
+    max(abs(apply(fem, 2, smd, g = g)))
+  })
+
+  candidates[[st]] <- data.frame(
+    stage = st, gene_set = names(effect), orthogonal_assay = assay_of[names(effect)],
+    effect_female_minus_male = effect, ci_low = ci[1, ], ci_high = ci[2, ],
+    higher_in = ifelse(effect > 0, "female", "male"),
+    against_depth_bias = effect < 0,
+    beats_within_library_null = abs(effect) > quantile(null_max, 0.95),
+    keeps_sign_unmatched = sign(effect) == sign(effect_raw))
+}
+candidates <- bind_rows(candidates) |>
+  arrange(desc(against_depth_bias & beats_within_library_null & keeps_sign_unmatched),
+          desc(beats_within_library_null), desc(abs(effect_female_minus_male)))
+write.csv(candidates, file.path(out_dir, "sex_candidates.csv"), row.names = FALSE)
+head(filter(candidates, beats_within_library_null), 20)
+
+p <- candidates |> filter(beats_within_library_null) |> slice_head(n = 25) |>
+  mutate(label = paste0(tolower(gsub("_", " ", sub("^GOBP_", "", gene_set))), " [", stage, "]")) |>
+  ggplot(aes(effect_female_minus_male, reorder(label, -effect_female_minus_male), colour = higher_in)) +
+  geom_vline(xintercept = 0, colour = "grey50") +
+  geom_pointrange(aes(xmin = ci_low, xmax = ci_high, shape = keeps_sign_unmatched)) +
+  scale_colour_manual(values = sex_cols) + scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 1)) +
+  labs(x = "Standardised difference, female - male", y = NULL,
+       title = "Sex-difference candidates (beat the within-library null)",
+       caption = "Sex is confounded with library. Male-high candidates resist the depth bias.")
+p; save_plot(p, "sex_candidates", 11, 8)
+```
+
+```{r}
+sessionInfo()
+```

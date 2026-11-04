@@ -65,6 +65,15 @@ Scripts are run from the project root. They also work from inside `scripts/`;
 nothing else uses the working directory, and no path is hard-coded outside
 `config/config.yml`.
 
+### As a notebook
+
+`analysis/bone_marrow_ageing.qmd` is the original notebook
+(`docs/original/bone_marrowaging.qmd`) rewritten simply, with the review's
+fixes folded in and each change marked **Changed:** where it happens. About
+900 lines instead of 5,800: one function per stage run for both sexes instead
+of duplicated sections, and the exploratory dead ends left out. Set
+`data_dir` at the top and render.
+
 ### As one Quarto file
 
 `analysis/pipeline.qmd` is the whole pipeline in a single file -- every
