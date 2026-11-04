@@ -171,8 +171,8 @@ age_trend_table <- function(result) {
 #' Requiring detection in all groups is what guarantees each gene has all
 #' three pairwise comparisons, and is what stops a gene seen in 3 of 26 cells
 #' from producing a 256-fold "change".
-detectable_genes <- function(obj, cfg, age_levels, age_col = "age") {
-  cnt <- Seurat::GetAssayData(obj, assay = "RNA", layer = "counts")
+detectable_genes <- function(obj, cfg, age_levels, age_col = "age", assay = "RNA") {
+  cnt <- Seurat::GetAssayData(obj, assay = assay, layer = "counts")
   ages <- as.character(obj[[age_col]][, 1])
 
   ok <- vapply(age_levels, function(a) {
@@ -188,8 +188,8 @@ detectable_genes <- function(obj, cfg, age_levels, age_col = "age") {
 }
 
 #' Antibodies whose median normalised signal clears the floor in every age.
-adequate_adt <- function(obj, cfg, age_levels, age_col = "age") {
-  dat <- Seurat::GetAssayData(obj, assay = "ADT", layer = "data")
+adequate_adt <- function(obj, cfg, age_levels, age_col = "age", assay = "ADT") {
+  dat <- Seurat::GetAssayData(obj, assay = assay, layer = "data")
   ages <- as.character(obj[[age_col]][, 1])
 
   ok <- vapply(age_levels, function(a) {
@@ -200,6 +200,28 @@ adequate_adt <- function(obj, cfg, age_levels, age_col = "age") {
   keep <- rownames(dat)[rowSums(ok) == length(age_levels)]
   log_step(sprintf("  ADT filter: %d of %d antibodies retained", length(keep), nrow(dat)))
   keep
+}
+
+#' The ages a stratum can actually support, in age order.
+#'
+#' The gate is applied per age rather than to the stratum as a whole. Treating
+#' "any age below the gate" as "skip the stratum" retired almost every stratum
+#' once 9m was restored -- 9m is the thin age in both libraries -- so steps 6
+#' and 8 silently produced nothing. Dropping the thin age keeps the others.
+#'
+#' @param ages one age label per cell.
+#' @return the subset of `age_levels` with at least `min_cells` cells.
+usable_ages <- function(ages, age_levels, min_cells) {
+  n <- table(factor(as.character(ages), levels = age_levels))
+  names(n)[n >= min_cells]
+}
+
+#' Ages usable in EVERY group, for contrasts that compare groups across the
+#' same ages (the sex x age interaction).
+shared_usable_ages <- function(ages, groups, age_levels, min_cells) {
+  per_group <- lapply(split(as.character(ages), as.character(groups)),
+                      usable_ages, age_levels = age_levels, min_cells = min_cells)
+  Reduce(intersect, per_group, age_levels)
 }
 
 age_pairs <- function(age_levels) {
@@ -252,36 +274,46 @@ max_or_na <- function(x) {
   if (!length(x)) NA_real_ else max(x)
 }
 
-#' Classify the 3-point trajectory shape from the early and net changes.
+#' Classify a trajectory shape from each age's change relative to the first.
 #'
-#' Positions are centred the same way a z-score would be, so the labels mean
-#' the same thing as the ones from age_trend_clusters().
-classify_shape <- function(early, net, thr_early, thr_net, age_levels, tol = NULL) {
-  if (is.null(tol)) tol <- mean(c(thr_early, thr_net)) / 2
-
-  positions <- cbind(0, early, net)
-  colnames(positions) <- age_levels
+#' `deltas` holds, per feature, the log2FC from the first age to every later
+#' age, in age order. Positions are centred the same way a z-score would be,
+#' so the labels mean the same thing as the ones from age_trend_clusters(),
+#' and the label has one word per age however many ages the stratum kept.
+classify_shape <- function(deltas, tol) {
+  deltas <- as.matrix(deltas)
+  positions <- cbind(0, deltas)
   positions <- positions - rowMeans(positions)
 
   labels <- ifelse(positions > tol, "high", ifelse(positions < -tol, "low", "middle"))
   out <- apply(labels, 1, paste, collapse = "_")
-  out[is.na(early) | is.na(net)] <- NA_character_
+  out[apply(is.na(deltas), 1, any)] <- NA_character_
   out
 }
 
 #' Age-changing features with permutation-calibrated thresholds.
 #'
-#' Works on either assay: RNA uses the detection filter, ADT the median-signal
-#' filter. The original notebook had two copies of this that overwrote each
-#' other in the global environment; this is the single parameterised version.
+#' Works on any assay: ADT uses the median-signal filter, anything else the
+#' detection filter. The original notebook had two copies of this that
+#' overwrote each other in the global environment; this is the single
+#' parameterised version.
+#'
+#' Written for any number of ages. It was written for three, and with all
+#' four in analysis.age_levels it failed on its first line of output -- the
+#' shape matrix had three columns and four names -- so this half of step 6
+#' produced nothing from the day 9m was restored. Every pairwise comparison
+#' is kept as its own column (`lfc_<from>_to_<to>`); `early`, `late` and `net`
+#' are first->second, second->last and first->last, kept so older tables
+#' still line up.
 age_changing <- function(obj, label, cfg, age_levels = cfg$analysis$age_levels,
-                         assay = c("RNA", "ADT")) {
-  assay <- match.arg(assay)
-  log_step("=== ", label, " / ", assay, " ===")
+                         assay = "RNA") {
+  is_adt <- identical(assay, "ADT")
+  log_step("=== ", label, " / ", assay, " (ages: ", paste(age_levels, collapse = ", "), ") ===")
+  if (length(age_levels) < 2) stop(label, ": need at least two ages")
 
-  features <- if (assay == "RNA") detectable_genes(obj, cfg, age_levels)
-              else adequate_adt(obj, cfg, age_levels)
-  min_features <- if (assay == "RNA") 50 else 5
+  features <- if (is_adt) adequate_adt(obj, cfg, age_levels, assay = assay)
+              else detectable_genes(obj, cfg, age_levels, assay = assay)
+  min_features <- if (is_adt) 5 else 50
   if (length(features) < min_features)
     warning(label, ": only ", length(features), " features pass the filter -- ",
             "this arm is likely underpowered")
@@ -293,45 +325,50 @@ age_changing <- function(obj, label, cfg, age_levels = cfg$analysis$age_levels,
 
   cmp <- function(from, to) paste0(from, "_to_", to)
   n <- length(age_levels)
-  thr <- function(name) thresholds$threshold[thresholds$comparison == name]
-  thr_early <- thr(cmp(age_levels[1], age_levels[2]))
-  thr_late  <- thr(cmp(age_levels[2], age_levels[n]))
-  thr_net   <- thr(cmp(age_levels[1], age_levels[n]))
+  thr <- stats::setNames(thresholds$threshold, thresholds$comparison)
 
   wide <- observed |>
     dplyr::select("feature", "comparison", "log2FC") |>
     tidyr::pivot_wider(names_from = "comparison", values_from = "log2FC") |>
     as.data.frame()
-  # Rename by position rather than with tidyselect, so the column names stay
-  # driven by age_levels instead of being hard-coded.
-  names(wide)[match(c(cmp(age_levels[1], age_levels[2]),
-                      cmp(age_levels[2], age_levels[n]),
-                      cmp(age_levels[1], age_levels[n])), names(wide))] <-
-    c("early", "late", "net")
+
+  pair_names <- vapply(age_pairs(age_levels), function(p) cmp(p[1], p[2]), character(1))
+  passes <- Reduce(`|`, lapply(pair_names, function(nm)
+    !is.na(wide[[nm]]) & abs(wide[[nm]]) > thr[[nm]]))
+  max_abs <- do.call(pmax, c(lapply(pair_names, function(nm) abs(wide[[nm]])),
+                             list(na.rm = TRUE)))
+
+  from_first <- vapply(age_levels[-1], function(a) cmp(age_levels[1], a), character(1))
+  tol <- stats::median(thr[from_first]) / 2
+
+  res <- data.frame(
+    feature = wide$feature,
+    early = wide[[cmp(age_levels[1], age_levels[2])]],
+    late = if (n > 2) wide[[cmp(age_levels[2], age_levels[n])]] else NA_real_,
+    net = wide[[cmp(age_levels[1], age_levels[n])]],
+    stringsAsFactors = FALSE)
+  for (nm in pair_names) res[[paste0("lfc_", nm)]] <- wide[[nm]]
 
   pct <- observed |>
     dplyr::group_by(.data$feature) |>
     dplyr::summarise(max_abs_pct_diff = max_or_na(abs(.data$pct_diff)),
                      .groups = "drop")
 
-  res <- wide |>
-    dplyr::left_join(pct, by = "feature") |>
-    dplyr::mutate(
-      max_abs_log2FC = pmax(abs(.data$early), abs(.data$late), abs(.data$net)),
-      passes = abs(.data$early) > thr_early | abs(.data$late) > thr_late |
-               abs(.data$net) > thr_net,
-      shape = classify_shape(.data$early, .data$net, thr_early, thr_net, age_levels),
-      sex = label
-    ) |>
-    dplyr::filter(.data$passes) |>
-    dplyr::arrange(dplyr::desc(.data$max_abs_log2FC))
+  res$max_abs_log2FC <- max_abs
+  res$passes <- passes
+  res$shape <- classify_shape(wide[, from_first, drop = FALSE], tol)
+  res$ages <- paste(age_levels, collapse = ",")
+  res$sex <- label
+  res <- dplyr::left_join(res, pct, by = "feature")
+  res <- res[res$passes, , drop = FALSE]
+  res <- res[order(-res$max_abs_log2FC), , drop = FALSE]
 
   # Sparsity artefacts show up as absurd fold changes; say so rather than
   # letting them through silently.
   med <- stats::median(res$max_abs_log2FC)
   log_step(sprintf("  %d features | median |log2FC| = %.2f | %d NA shapes",
                    nrow(res), med, sum(is.na(res$shape))))
-  if (assay == "RNA" && !is.na(med) && med > 2)
+  if (!is_adt && !is.na(med) && med > 2)
     warning(label, ": median |log2FC| = ", round(med, 2),
             " -- still sparsity-driven; raise permutation_de.min_cells")
 
@@ -340,7 +377,11 @@ age_changing <- function(obj, label, cfg, age_levels = cfg$analysis$age_levels,
 
 #' Join the two sexes' age-changing tables and flag matching shapes.
 compare_sexes <- function(male_res, female_res) {
-  dplyr::inner_join(male_res, female_res, by = "feature", suffix = c("_M", "_F")) |>
+  # Only the summary columns are joined; the per-pair lfc_ columns differ
+  # between sexes whenever the two arms kept different ages.
+  keep <- c("feature", "shape", "early", "late", "net", "max_abs_log2FC")
+  dplyr::inner_join(male_res[, keep], female_res[, keep], by = "feature",
+                    suffix = c("_M", "_F")) |>
     dplyr::select("feature", "shape_M", "shape_F",
                   "early_M", "late_M", "net_M", "early_F", "late_F", "net_F",
                   "max_abs_log2FC_M", "max_abs_log2FC_F") |>
@@ -377,9 +418,23 @@ calibrate_threshold <- function(obs_p, null_p, target = 0.05) {
 #' Shuffle age within the object (breaks the age effect, keeps depth structure).
 shuffle_age <- function(meta) { meta$age <- sample(meta$age); meta }
 
+#' Shuffle age within each stage, when a stage column is present.
+#'
+#' Keeps the stage x age table intact, so a model that carries stage as a
+#' covariate is tested against a null with the same composition.
+shuffle_age_within_stage <- function(meta) {
+  if (is.null(meta$stage)) return(shuffle_age(meta))
+  shuffled <- stats::ave(as.character(meta$age), as.character(meta$stage), FUN = sample)
+  meta$age <- factor(shuffled, levels = levels(meta$age))
+  meta
+}
+
 #' Shuffle sex within each age (keeps the age main effect intact).
+#'
+#' Within age x stage when a stage column is present, for the same reason.
 shuffle_sex_within_age <- function(meta) {
-  shuffled <- stats::ave(as.character(meta$sex), meta$age, FUN = sample)
+  strata <- if (is.null(meta$stage)) meta$age else interaction(meta$age, meta$stage, drop = TRUE)
+  shuffled <- stats::ave(as.character(meta$sex), strata, FUN = sample)
   meta$sex <- factor(shuffled, levels = levels(meta$sex))
   meta
 }
@@ -398,10 +453,14 @@ shuffle_age_sex <- function(meta) {
 #' column is that level's offset from it.
 glm_group_means <- function(fit, age_levels) {
   B <- fit$Beta
-  if (ncol(B) != length(age_levels))
-    stop("fit has ", ncol(B), " coefficients but ", length(age_levels),
-         " age levels were given; is the design ~ age with treatment coding?")
-  means <- cbind(B[, 1], B[, 1] + B[, -1, drop = FALSE])
+  # With covariates in the model (stage), the age offsets are the columns
+  # named for age; the means are then at the reference level of each
+  # covariate, which z-scoring across ages makes irrelevant.
+  age_cols <- grep("^age", colnames(B))
+  if (length(age_cols) != length(age_levels) - 1)
+    stop("fit has ", length(age_cols), " age coefficients but ", length(age_levels),
+         " age levels were given; is age treatment-coded in the design?")
+  means <- cbind(B[, 1], B[, 1] + B[, age_cols, drop = FALSE])
   colnames(means) <- age_levels
   means
 }

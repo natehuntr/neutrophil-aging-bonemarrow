@@ -59,7 +59,7 @@ cat("\n")
 cran <- c(
   "yaml", "here", "dplyr", "tidyr", "tibble", "purrr", "readr", "glue",
   "ggplot2", "patchwork", "pheatmap", "matrixStats", "Matrix", "scales",
-  "Seurat", "SeuratObject", "R.utils", "ggVennDiagram", "clustree",
+  "Seurat", "SeuratObject", "R.utils", "clustree",
   "msigdbr", "remotes", "BiocManager", "SoupX",
   # monocle3's dependencies, installed here rather than left to it, so the
   # API-free route below has everything it needs already present. sf and
@@ -286,7 +286,7 @@ needed_by <- list(
   "matrixStats"          = "all steps",
   "pheatmap"             = "6",
   "yaml"                 = "all steps",
-  "scales"               = "9",
+  "scales"               = "9, 13",
   "scDblFinder"          = "1",
   "SingleCellExperiment" = "1, 2, 5, 7, 9",
   "SummarizedExperiment" = "1, 2, 5, 7, 9",
@@ -301,8 +301,7 @@ needed_by <- list(
   "tradeSeq"             = "5",
   "glmGamPoi"            = "2, 3, 7",
   "fgsea"                = "8",
-  "msigdbr"              = "8",
-  "ggVennDiagram"        = "5"
+  "msigdbr"              = "8"
 )
 required <- names(needed_by)
 status <- vapply(required, requireNamespace, logical(1), quietly = TRUE)

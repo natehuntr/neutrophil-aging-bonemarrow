@@ -10,6 +10,8 @@
 # and applies the QC thresholds.
 #
 # Writes: results/objects/<key>_filtered.rds
+#         results/objects/<key>_protein_preqc.rds  (surface protein of every
+#           hashtagged cell, with its QC outcome -- read by step 12)
 #         results/figures/<key>_qc.pdf, <key>_doublets.pdf
 # ---------------------------------------------------------------------------
 
@@ -43,7 +45,14 @@ for (key in sample_keys) {
   save_figure(plot_qc_metrics(obj), cfg, paste0(key, "_qc.pdf"))
   save_figure(plot_doublet_scores(obj), cfg, paste0(key, "_doublets.pdf"))
 
-  obj <- filter_cells(obj, cfg, hashtags = names(sample_cfg$hashtags))
+  # The QC decision is computed once and used twice: to save the protein
+  # record of every hashtagged cell, removed ones included (step 12 stages
+  # them by protein), and to filter.
+  status <- qc_status(obj, cfg, hashtags = names(sample_cfg$hashtags))
+  save_object(protein_record(obj, status, sample_cfg), cfg,
+              paste0(key, "_protein_preqc.rds"))
+
+  obj <- filter_cells(obj, cfg, hashtags = names(sample_cfg$hashtags), status = status)
   save_object(obj, cfg, paste0(key, "_filtered.rds"))
 
   rm(mats, obj)

@@ -1,195 +1,144 @@
 ---
 title: "Neutrophil ageing in mouse bone marrow"
-subtitle: "CITE-seq, male and female, 3-18 months"
+subtitle: "CITE-seq, one 10x run per sex, four ages (3, 9, 12, 18 months)"
 format:
   html:
     toc: true
-    toc-depth: 3
-    code-fold: true
+    toc-depth: 2
     embed-resources: true
+    fig-width: 10
 execute:
+  echo: false
   warning: false
   message: false
 ---
 
 ```{r setup}
 #| include: false
+# The report reads what the pipeline wrote and recomputes nothing. Run the
+# pipeline (or at least step 13) first: `Rscript scripts/run_all.R`.
 source(here::here("R", "setup.R"))
-cfg <- init_project(quiet = TRUE)
-load_modules()
+cfg <- load_config()
+fig_dir <- file.path(cfg$paths$figures, "summary")
 
-# The report reads what the pipeline wrote. It does not recompute anything:
-# run `Rscript scripts/run_all.R` first.
-have <- function(name) file.exists(table_path(cfg, name)) ||
-                       file.exists(object_path(cfg, name))
-read_result <- function(name) utils::read.csv(table_path(cfg, name))
+show_fig <- function(id) {
+  f <- list.files(fig_dir, paste0("^", id, "_.*\\.png$"), full.names = TRUE)
+  if (length(f)) knitr::include_graphics(f[1])
+  else knitr::asis_output(sprintf(
+    "\n> **%s not drawn.** Its table has not been produced; see `%s/FIGURES.md`.\n",
+    id, fig_dir))
+}
+read_result <- function(name) {
+  path <- table_path(cfg, name)
+  if (file.exists(path)) utils::read.csv(path, stringsAsFactors = FALSE) else NULL
+}
+show_table <- function(df, cols = NULL, digits = 2, n = 20, caption = NULL) {
+  if (is.null(df) || !nrow(df))
+    return(knitr::asis_output("\n> *Table not produced by this run.*\n"))
+  if (!is.null(cols)) df <- df[, intersect(cols, names(df)), drop = FALSE]
+  knitr::kable(utils::head(df, n), digits = digits, caption = caption)
+}
 ```
 
-## Design
+## What this can and cannot say
 
-Two hashed CITE-seq runs, one per sex, each multiplexing four ages
-(`r paste(cfg$analysis$all_age_levels, collapse = ", ")`) across four hashtag
-oligos. Every cross-age comparison below uses
-`r paste(cfg$analysis$age_levels, collapse = ", ")` only: 9m is not populated
-in every cell-type stratum, and including it would make the strata
-non-comparable.
+Each sex is one 10x library, so **every male-versus-female number is also a
+library-versus-library number**. Ages are hashed *within* a library, so **age
+comparisons within a sex are free of batch**. Each age is one hashtag pooling
+six mice: cells are pseudoreplicates, intervals describe sampling of cells, and
+no statistic here describes variation between mice. The results are a ranked
+set of hypotheses for per-mouse validation, not findings.
 
-| Step | Script | Output |
-|---|---|---|
-| Preprocess (ADT/HTO, QC, doublets) | `01_preprocess.R` | `<sex>_filtered.rds` |
-| Reductions, SingleR, stem/neutrophil subset | `02_annotate.R` | `<sex>_annotated.rds`, `<sex>_neustem.rds` |
-| Merge sexes, stage the granulocytes | `03_merge.R` | `gmp_neutrophils.rds` |
-| Male vs female within age | `04_sex_differences.R` | `degs_<age>_<assay>.csv` |
-| Pseudotime trajectories | `05_trajectory.R` | `<sex>_<age>_trajectory_moran.csv` |
-| Age trends per stage | `06_age_trends.R` | `age_trend_<stage>_<sex>.csv` |
-| NB-GLM omnibus and interaction | `07_glm_models.R` | `omnibus_<sex>.csv` |
-| Sex x age GSEA, per stage | `08_gsea.R` | `gsea_sex_by_age_GOBP_<stage>.csv` |
-| Composition and trajectory shifts | `09_development_shifts.R` | `stage_age_trends.csv`, `pseudotime_shifts.csv` |
+## 1. What the data can be trusted for
 
-## Quality control
-
-```{r qc}
-#| eval: !expr file.exists(object_path(cfg, "gmp_neutrophils.rds"))
-gmp_neu <- read_object(cfg, "gmp_neutrophils.rds")
-knitr::kable(table(gmp_neu$fine_neu_labels, gmp_neu$sex),
-             caption = "Cells per developmental stage and sex")
-knitr::kable(table(gmp_neu$age, gmp_neu$sex),
-             caption = "Cells per age and sex")
+```{r}
+show_fig("fig01")
 ```
 
-Per-sample QC distributions and doublet scores are in
-`results/figures/<sex>_qc.pdf` and `<sex>_doublets.pdf`.
+Depth by stage, age and library, on the counts the analyses read. Strata far
+below the rest were not matched by the old single global target; matching is
+now done inside each stratum (`fig02`).
 
-## Granulopoiesis
-
-```{r stages}
-#| eval: !expr exists("gmp_neu")
-#| fig-width: 12
-#| fig-height: 5
-Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "fine_neu_labels") +
-  Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "sex")
+```{r}
+show_fig("fig02")
+show_fig("fig03")
 ```
 
-Stage labels come from clustering the merged GMP + neutrophil object and
-mapping cluster ids to maturation stages via
-`analysis.neutrophil_cluster_labels` in `config/config.yml`. **Cluster
-numbering is not stable across Seurat versions**: if step 3 is re-run, check
-`results/figures/gmp_neutrophil_modules.pdf` against
-`gmp_neutrophil_clusters.pdf` before trusting the mapping.
+RNA and protein disagree most at the immature/mature boundary. Stage-resolved
+results inherit that uncertainty.
 
-## Does development itself shift with age?
+## 2. How the stage mix changes with age
 
-Two things the expression analyses cannot see: whether the *mix* of maturation
-stages changes, and whether cells sit further along the trajectory. Both are
-compared across ages within a sex, which is the design-clean contrast.
-
-```{r composition}
-#| eval: !expr have("stage_age_trends.csv")
-comp <- read_result("stage_composition.csv")
-trends <- read_result("stage_age_trends.csv")
-
-knitr::kable(trends[order(-abs(trends$log_odds_per_step)),
-                    c("sex", "stage", "prop_first", "prop_last",
-                      "log_odds_per_step", "padj")],
-             row.names = FALSE, digits = 3,
-             caption = "Change in each stage's share per timepoint step")
+```{r}
+show_fig("fig04")
+show_fig("fig05")
+show_table(read_result("stage_age_trends.csv"),
+           c("sex", "stage", "prop_first", "prop_last", "log_odds_per_step", "padj"),
+           caption = "Log-odds change in each stage's share per age step")
+show_fig("fig06")
 ```
 
-`log_odds_per_step` is the slope of a stage's share against age rank: positive
-means that stage takes up more of the granulocytic compartment in older
-animals. `results/figures/stage_composition.pdf` and `stage_trends.pdf` show
-the same thing.
+## 3. Did RNA QC remove the cells? (protein gate)
 
-```{r pseudotime-shift}
-#| eval: !expr have("pseudotime_shifts.csv")
-shifts <- read_result("pseudotime_shifts.csv")
-knitr::kable(shifts[, c("sex", "group", "n", "median_shift", "wasserstein",
-                        "frac_beyond_reference_median", "ks_padj")],
-             row.names = FALSE, digits = 3,
-             caption = "Pseudotime distribution relative to the youngest age")
+The male library loses immature and mature cells with age, and those are the
+lowest-RNA cells. Surface protein does not depend on RNA capture, so step 12
+stages every hashtagged singlet by Ly6G / CD11b / CXCR2, including the cells RNA
+QC removed. **If protein-defined mature cells are present before QC and lost
+after it, the RNA trend is QC loss.**
+
+```{r}
+show_fig("fig10")
+show_fig("fig09")
+show_table(read_result("protein_stage_age_trends.csv"),
+           c("cell_set", "sex", "stage", "prop_first", "prop_last", "log_odds_per_step"),
+           caption = "Protein-stage share per age step, before and after RNA QC")
 ```
 
-`frac_beyond_reference_median` is the share of that group's cells sitting past
-the youngest group's median pseudotime; it is 0.5 for the reference by
-construction, so anything above that is cells having moved further along.
-`wasserstein` is the average shift in pseudotime units, which unlike the KS
-statistic is comparable between rows.
+## 4. Upstream: the progenitor compartment
 
-The KS p-values are computed over cells, which are pseudoreplicates: read the
-distances, not the p-values. `potency_shifts.csv` asks the same question of
-CytoTRACE2 potency, which does not depend on where the trajectory root landed
-— if both move the same way, the shift is not an artefact of the fit.
-
-## Sex differences within each age
-
-```{r sex-degs}
-#| eval: !expr have(sprintf("degs_%s_RNA.csv", cfg$analysis$age_levels[1]))
-degs <- lapply(stats::setNames(cfg$analysis$age_levels, cfg$analysis$age_levels),
-               function(a) read_result(sprintf("degs_%s_RNA.csv", a)))
-
-summary_tbl <- data.frame(
-  age = names(degs),
-  up_in_male   = vapply(degs, function(d) sum(d$p_val_adj < 0.05 & d$avg_log2FC > 0), integer(1)),
-  up_in_female = vapply(degs, function(d) sum(d$p_val_adj < 0.05 & d$avg_log2FC < 0), integer(1))
-)
-knitr::kable(summary_tbl, row.names = FALSE,
-             caption = "Significant genes by direction (ident.1 = male)")
+```{r}
+show_fig("fig07")
+show_fig("fig08")
 ```
 
-## Age trends by stage
+## 5. Where cells sit along the trajectory
 
-```{r age-trends}
-#| eval: !expr have(sprintf("age_trend_mature_%s.csv", cfg$analysis$sex_levels[1]))
-files <- list.files(cfg$paths$tables, pattern = "^age_trend_.*\\.csv$", full.names = TRUE)
-trend_summary <- do.call(rbind, lapply(files, function(f) {
-  parts <- strsplit(sub("\\.csv$", "", basename(f)), "_")[[1]]
-  d <- utils::read.csv(f)
-  data.frame(stage = parts[3], sex = parts[4], n_changing = nrow(d))
-}))
-knitr::kable(trend_summary, row.names = FALSE,
-             caption = sprintf("Genes with |rho| > %.2f against age",
-                               cfg$age_trend$rho_cutoff))
+```{r}
+show_fig("fig11")
+show_fig("fig12")
 ```
 
-Effect-size distributions for the two sexes: `results/figures/rho_distributions.pdf`.
-Pseudobulk PCA per stage: `results/figures/pseudobulk_pca_by_stage.pdf`.
+Read the pooled panel against the within-stage panels: a pooled shift with
+flat within-stage panels is the stage mix moving, not the cells.
 
-## Sex x age interaction
+## 6. What changes in expression
 
-Run separately within each maturation stage. Pooling stages would let a
-composition shift masquerade as a within-cell age trend.
-
-```{r gsea}
-#| eval: !expr have(sprintf("gsea_sex_by_age_GOBP_%s.csv", cfg$gsea$stages[1]))
-gsea <- read_result(sprintf("gsea_sex_by_age_GOBP_%s.csv", cfg$gsea$stages[1]))
-top <- gsea[gsea$padj < 0.05 & gsea$independent, ]
-knitr::kable(utils::head(top[, c("pathway", "NES", "padj", "signal_type",
-                                 "dominant_pattern")], 20),
-             row.names = FALSE, digits = 3,
-             caption = sprintf("Independent GO:BP hits, sex x age interaction (%s)",
-                               cfg$gsea$stages[1]))
+```{r}
+show_fig("fig13")
+show_fig("fig14")
+show_fig("fig15")
+show_fig("fig16")
+show_fig("fig17")
+show_fig("fig18")
+show_fig("fig19")
+show_fig("fig20")
+show_fig("fig21")
 ```
 
-A positive NES means the age trajectory is **more positive in males** than in
-females. It does not mean the pathway is higher in males, and it does not mean
-males age faster: `signal_type` and `dominant_pattern` say which of those the
-leading edge actually supports. Pathways to report are the ones flagged
-`robust` in `gsea_sensitivity_comparison.csv`, which survive removing the
-abundant granule transcripts.
+## 7. The sex contrast
 
-## Caveats
+Not a test of sex: a ranked list of candidates for orthogonal assays. The
+deeper library is female, so a female-high result is what the confound
+predicts; male-high results that survive depth matching rank first.
 
-- Cells are pseudoreplicates: one hashtag per age means no biological
-  replication, so per-cell p-values overstate the evidence. Everything selected on a
-  permutation-calibrated threshold (steps 6 and 7) accounts for this; anything
-  selected on a BH-adjusted Wilcoxon p-value does not.
-- One 10x run per sex means sex is completely confounded with batch. Sex
-  differences here cannot be separated from run-to-run technical variation.
-- No ambient-RNA correction is applied. Highly expressed granule transcripts
-  are the ones most likely to bleed between droplets, and they are also the
-  ones carrying the maturation signal, so read stage-specific results for
-  those genes with that in mind.
+```{r}
+show_fig("fig22")
+show_fig("fig23")
+```
 
-```{r session}
-sessionInfo()
+## Figure index
+
+```{r}
+idx <- file.path(fig_dir, "FIGURES.md")
+if (file.exists(idx)) knitr::asis_output(paste(readLines(idx)[-(1:2)], collapse = "\n"))
 ```

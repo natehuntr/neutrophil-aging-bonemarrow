@@ -150,10 +150,25 @@ write_table <- function(df, cfg, name, row.names = FALSE) {
   invisible(path)
 }
 
+#' Save a figure as PDF, plus a PNG beside it (figures.png in the config).
+#'
+#' The PNG is what goes into the report and the results bundle: it opens
+#' anywhere and is a fraction of the size of a PDF holding thousands of points.
+#' A figure that fails to draw is reported and skipped rather than stopping
+#' the step -- the tables are the result, the figure illustrates them.
 save_figure <- function(plot, cfg, name, width = 9, height = 7) {
   path <- figure_path(cfg, name)
-  ggplot2::ggsave(path, plot, width = width, height = height)
-  log_step("wrote ", path)
+  ok <- tryCatch({
+    ggplot2::ggsave(path, plot, width = width, height = height)
+    if (isTRUE(cfg$figures$png %||% TRUE))
+      ggplot2::ggsave(sub("\\.pdf$", ".png", path), plot, width = width,
+                      height = height, dpi = cfg$figures$dpi %||% 150, bg = "white")
+    TRUE
+  }, error = function(e) {
+    log_step("FIGURE NOT WRITTEN: ", name, " -- ", conditionMessage(e))
+    FALSE
+  })
+  if (ok) log_step("wrote ", path)
   invisible(path)
 }
 

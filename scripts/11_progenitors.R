@@ -130,11 +130,13 @@ if (!is.null(imbalance)) {
 # it is not on this object. Matching is rebuilt here, over the progenitor
 # compartment's own cells: thinning toward a target computed from a different
 # population would be the wrong target for this one.
+# Ages are equalised within each sex x population, which is what the 3m vs
+# 18m contrast below compares. A single compartment-wide target left the
+# shallow populations unmatched.
 assay <- "RNA"
 if (isTRUE(cfg$depth$match)) {
-  match_on <- cfg$depth$match_on %||% "sex"
-  require_metadata(prog, match_on, context = "progenitor depth matching")
-  prog <- add_matched_assay(prog, cfg, group_col = match_on)
+  prog <- add_matched_assay(prog, cfg, group_col = "age",
+                            within_cols = c("sex", "progenitor"))
   assay <- "RNAmatched"
 }
 log_step("progenitor expression contrasts read the ", assay, " assay")

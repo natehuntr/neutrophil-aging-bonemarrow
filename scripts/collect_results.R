@@ -18,7 +18,9 @@
 # ---------------------------------------------------------------------------
 
 source(if (file.exists("R/setup.R")) "R/setup.R" else "../R/setup.R")
-cfg <- init_project(quiet = TRUE)
+# Only the config, not init_project(): this reads and writes CSVs with base R,
+# and should run on a login node or a laptop without Seurat installed.
+cfg <- load_config()
 
 out_dir <- file.path(dirname(cfg$paths$tables), "summary")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -95,11 +97,43 @@ take_whole("stage_assignment_margins.csv",
            "whether stage disagreements are fuzzy or contradictory, per stage")
 take_whole("sex_control_gates.csv", "gate outcomes for the sex contrast")
 take_whole("sex_gene_panel_check.csv", "sex-chromosome genes present in the probe set")
+take_whole("within_library_null.csv", "sex separation per stage against random splits of one library")
+take_whole("depth_matching_targets.csv", "depth ratio per matching stratum, before and after thinning")
+take_whole("interaction_age_sex.csv", "NB-GLM age x sex interaction hits (stage-adjusted)")
+take_whole("pt_age_sex_fitted.csv", "trajectory model fitted values for its hits (step 7B)")
+
+# --- protein gate (step 12) --------------------------------------------------
+take_whole("protein_gate_retention.csv",
+           "share of each protein-defined stage kept by RNA QC, per sex and age")
+take_whole("protein_stage_composition.csv",
+           "stage mix from surface protein, before and after RNA QC")
+take_whole("protein_stage_age_trends.csv", "protein-stage share per age step")
+take_whole("protein_gate_thresholds.csv", "per-library protein gate thresholds")
+take_whole("protein_class_counts.csv", "every protein class, by QC outcome")
+take_whole("protein_vs_rna_stage.csv", "protein class against RNA stage")
+
+# --- step 6 per-stratum age trends: short lists ------------------------------
+for (file in list.files(cfg$paths$tables, "^age_trend_(GMPs|proNeu|preNeu|immature|mature)_(female|male)\\.csv$"))
+  take_whole(file, "genes whose four-age trend beats the permutation null")
 
 # --- per-gene endpoint tables, whole: they are already short ----------------
-for (file in list.files(cfg$paths$tables, "^endpoint_(?!gsea|summary|progenitor_summary)",
-                        perl = TRUE)) {
+# list.files() takes no `perl` argument and its regex engine has no lookahead,
+# so the exclusions are applied separately.
+endpoint_files <- list.files(cfg$paths$tables, "^endpoint_")
+endpoint_files <- endpoint_files[!grepl("^endpoint_(gsea|summary|progenitor_summary)",
+                                        endpoint_files)]
+for (file in endpoint_files) {
   take_whole(file, "genes changing 3m -> 18m, with their 9m/12m shape")
+}
+
+# --- step 6 pairwise age changes: protein is the depth-robust modality -------
+# The ADT tables are the only per-feature age result that does not ride on RNA
+# depth, which is what makes them the check on the low-depth male strata.
+for (file in list.files(cfg$paths$tables, "^age_changing_.*_ADT[.]csv$")) {
+  take_whole(file, "surface proteins changing with age (step 6, ADT)")
+}
+for (file in list.files(cfg$paths$tables, "^age_changing_.*_RNA[.]csv$")) {
+  take_whole(file, "genes changing with age (step 6, RNA)")
 }
 
 # --- sex candidates: the ones the ranking says to believe --------------------
@@ -121,10 +155,23 @@ take_filtered("pt_age_sex_hits.csv", "trajectory GLM hits",
               function(df) rep(TRUE, nrow(df)), "")
 for (file in list.files(cfg$paths$tables, "^omnibus_")) {
   take_filtered(file, "cell-level NB-GLM omnibus test",
-                function(df) utils::head(order(df$p_val_diagnostic %||%
-                                                 seq_len(nrow(df))), 500) %in%
-                  seq_len(nrow(df)),
+                function(df) seq_len(nrow(df)) %in%
+                  utils::head(order(df$p_val_diagnostic %||% df$pval %||%
+                                      seq_len(nrow(df))), 500),
                 "top 500 by the diagnostic statistic")
+}
+
+# --- summary figures (step 13), as PNGs ---------------------------------------
+fig_dir <- file.path(cfg$paths$figures, "summary")
+if (dir.exists(fig_dir)) {
+  out_figs <- file.path(out_dir, "figures")
+  dir.create(out_figs, showWarnings = FALSE)
+  pngs <- list.files(fig_dir, "\\.png$", full.names = TRUE)
+  file.copy(c(pngs, file.path(fig_dir, "FIGURES.md")), out_figs, overwrite = TRUE)
+  record("figures/", "summary figures from step 13 (see figures/FIGURES.md)",
+         length(pngs), length(pngs))
+} else {
+  record("figures/", "summary figures from step 13", 0, 0, "NOT PRODUCED")
 }
 
 # --- manifest ----------------------------------------------------------------
@@ -153,7 +200,8 @@ lines <- c(
           tbl$description, tbl$note))
 writeLines(lines, file.path(out_dir, "MANIFEST.md"))
 
-size <- sum(file.info(list.files(out_dir, full.names = TRUE))$size, na.rm = TRUE)
+size <- sum(file.info(list.files(out_dir, full.names = TRUE, recursive = TRUE))$size,
+            na.rm = TRUE)
 log_step("wrote ", nrow(tbl), " files to ", out_dir,
          " (", round(size / 1024), " KB)")
 missing <- tbl$file[tbl$note == "NOT PRODUCED"]

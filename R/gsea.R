@@ -232,16 +232,20 @@ sex_de_at_age <- function(obj, this_age, cfg,
 #' sit on different backgrounds and are not comparable, which is the whole
 #' point of the comparison.
 compare_perage_to_interaction <- function(obj, rank_tbl, pathways, cfg,
-                                          age_levels = cfg$analysis$age_levels) {
+                                          age_levels = cfg$analysis$age_levels,
+                                          assay = "RNA") {
   ranks <- stats::setNames(rank_tbl$z_diff, rank_tbl$gene)
+  # Only the ages the object holds: asking for an age the caller filtered out
+  # subsets to zero cells and stops the step.
+  age_levels <- intersect(age_levels, unique(as.character(obj$age)))
   de_list <- lapply(stats::setNames(age_levels, age_levels),
-                    function(a) sex_de_at_age(obj, a, cfg))
+                    function(a) sex_de_at_age(obj, a, cfg, assay = assay))
 
   universe <- Reduce(intersect, c(lapply(de_list, `[[`, "gene"), list(names(ranks))))
   log_step("shared universe: ", length(universe), " genes")
 
   rank_at_age <- lapply(de_list, function(d) {
-    d <- d[d$gene %in% universe, ]
+    d <- d[d$gene %in% universe & !d$gene %in% SEX_CHR_GENES, ]
     d <- d[order(-d$avg_log2FC), ]
     stats::setNames(d$avg_log2FC, d$gene)
   })

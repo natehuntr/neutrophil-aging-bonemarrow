@@ -151,21 +151,33 @@ save_figure(Seurat::DimPlot(gmp_neu, reduction = "umap", group.by = "seurat_clus
 
 # ---------------------------------------------------------------------------
 # Depth-matched counts, built once here and used by every step that compares
-# across strata. Matching on depth.match_on (age_sex) equalises the finest
-# grouping any downstream contrast uses, so step 4's sex contrast and steps
-# 6/9's within-sex age contrasts all read the same assay rather than each
-# thinning the counts their own way.
+# across strata. Two assays, because the two kinds of comparison need
+# different matching (see depth.match_within in the config):
+#   RNAmatched      ages equalised within each sex x stage
+#   RNAmatched_sex  age x sex groups equalised within each stage
 # ---------------------------------------------------------------------------
 if (isTRUE(cfg$depth$match)) {
-  match_on <- cfg$depth$match_on %||% "sex"
-  require_metadata(gmp_neu, match_on, context = "depth matching")
-  gmp_neu <- add_matched_assay(gmp_neu, cfg, group_col = match_on)
+  within <- unlist(cfg$depth$match_within %||% list())
+  match_on <- cfg$depth$match_on %||% "age_sex"
+  require_metadata(gmp_neu, c("age", "sex", match_on, within), context = "depth matching")
+
+  gmp_neu <- add_matched_assay(gmp_neu, cfg, group_col = "age",
+                               assay_name = "RNAmatched",
+                               within_cols = c("sex", within))
+  gmp_neu <- add_matched_assay(gmp_neu, cfg, group_col = match_on,
+                               assay_name = "RNAmatched_sex",
+                               within_cols = within)
+  targets <- rbind(
+    cbind(assay = "RNAmatched", attr(gmp_neu, "RNAmatched_targets")),
+    cbind(assay = "RNAmatched_sex", attr(gmp_neu, "RNAmatched_sex_targets")))
+  if (nrow(targets)) write_table(targets, cfg, "depth_matching_targets.csv")
 
   # Potency is re-scored on the matched counts. CytoTRACE2 tracks
   # transcriptional complexity directly, so of everything in the pipeline it
   # is the measure most exposed to a depth difference -- and step 9 compares
-  # it across ages. The unmatched score stays on the object under its original
-  # name, so the two can be compared.
+  # it across ages, within sex, which is what RNAmatched equalises. The
+  # unmatched score stays on the object under its original name, so the two
+  # can be compared.
   if (isTRUE(cfg$depth$match_potency)) {
     log_step("re-scoring CytoTRACE2 on depth-matched counts")
     rescored <- run_cytotrace2(gmp_neu, cfg, assay = "RNAmatched")
